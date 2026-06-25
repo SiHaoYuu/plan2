@@ -24,7 +24,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install torch torchvision torchaudio
 pip install gensim scikit-learn pandas numpy matplotlib thop onnx onnxruntime
-pip freeze > environment/requirements-lock.txt
+pip freeze > requirements-lock.txt
 ```
 
 实验脚本应通过提交到仓库的配置运行，例如 `python train.py --config configs/base.yaml`。避免把关键参数只写在 notebook 或临时命令中。
