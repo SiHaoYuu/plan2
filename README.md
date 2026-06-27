@@ -18,6 +18,31 @@
 
 当前尚未完成实验代码、数据冻结索引、教师 logits 缓存、模型训练结果、表格和图。
 
+## feature/pcap 分支说明
+
+当前 `feature/pcap` 分支是独立工程原型，用于研究“如何通过 pcap 文件做回放式输入，并让模型进行包级和流级检测”。该分支暂不合并 `main`，实现上与原训练消融任务剥离，不修改冻结数据划分、模型选择规则或论文结果表。
+
+新增模块位于 `pcap_replay_detection/`，第一版支持：
+
+- 从 `.pcap` / `.pcapng` 文件按原始顺序读取 packet。
+- `packet` 模式：每个可检测 packet 输出一次预测。
+- `flow` 模式：按五元组 `src_ip, dst_ip, src_port, dst_port, protocol` 聚合后输出预测。
+- `mock` 推理后端：在真实 PyTorch/ONNX 模型接入前验证完整管线。
+
+运行示例：
+
+```sh
+python -m pcap_replay_detection.detect --pcap sample.pcap --mode packet --backend mock --output packet_results.csv
+python -m pcap_replay_detection.detect --pcap sample.pcap --mode flow --backend mock --output flow_results.jsonl
+```
+
+常用参数：
+
+- `--limit N`：只处理前 N 个 packet，便于调试。
+- `--realtime`：按 pcap 时间戳间隔睡眠，模拟实时回放。
+- `--max-packet-bytes`：包级输入的最大 byte token 长度。
+- `--max-flow-packets` / `--max-flow-bytes`：流级聚合上限。
+
 ## 建议目录结构
 
 后续开发按以下结构组织：
