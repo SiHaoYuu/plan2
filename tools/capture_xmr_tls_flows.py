@@ -139,7 +139,7 @@ class CaptureConfig:
     tls_packets_per_flow: int = 100
     tls_display_filter: str = "tls"
     chunk_seconds: int = 30
-    max_idle_seconds_per_pool: int = 180
+    max_idle_seconds_per_pool: int = 1800
     temp_dir: Path | None = None
     dry_run: bool = False
 
@@ -410,6 +410,21 @@ class CaptureSession:
             self.sequences_by_pool[slug] = next_pool_sequence(self.config.out_dir, slug)
         return self.sequences_by_pool[slug]
 
+    def incomplete_flow_stats(self, pool: PoolConfig) -> tuple[int, int]:
+        pool_slug = self.pool_slug(pool)
+        active_states = [
+            state
+            for (slug, _), state in self.flows.items()
+            if slug == pool_slug
+            and not state.exported
+            and state.initial_syn_packet is not None
+        ]
+        max_tls_packets = max(
+            (len(state.tls_packets) for state in active_states),
+            default=0,
+        )
+        return len(active_states), max_tls_packets
+
     def capture_pool(self, pool: PoolConfig, temp_root: Path) -> None:
         try:
             addresses = resolve_host(pool.host)
@@ -440,18 +455,24 @@ class CaptureSession:
             address_index += 1
             chunk_path = self.capture_chunk(pool, address, temp_root)
             packets = self.read_tls_packets(chunk_path)
+            self.add_packets(pool, packets, temp_root)
+            active_flows, max_tls_packets = self.incomplete_flow_stats(pool)
             if packets:
                 idle_seconds = 0
+                tls_packets = sum(1 for packet in packets if packet.is_tls)
                 print(
-                    f"本分片识别到 {len(packets)} 个 TLS 包，"
-                    f"当前已跟踪 {len(self.flows)} 条双向 flow"
+                    f"本分片识别到 {tls_packets} 个 TLS 包，"
+                    f"当前已跟踪 {len(self.flows)} 条双向 flow；"
+                    f"未完成完整 flow {active_flows} 条，"
+                    f"最多 {max_tls_packets}/{self.config.tls_packets_per_flow} 个 TLS 包"
                 )
             else:
                 idle_seconds += self.config.chunk_seconds
                 print(
-                    f"本分片没有 TLS 包，矿池空闲累计 {idle_seconds} 秒"
+                    f"本分片没有 TLS 包，矿池空闲累计 {idle_seconds} 秒；"
+                    f"未完成完整 flow {active_flows} 条，"
+                    f"最多 {max_tls_packets}/{self.config.tls_packets_per_flow} 个 TLS 包"
                 )
-            self.add_packets(pool, packets, temp_root)
 
     def capture_chunk(self, pool: PoolConfig, address: str, temp_root: Path) -> Path:
         safe_name = sanitize_pool_name(pool.name)

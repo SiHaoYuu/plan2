@@ -263,3 +263,39 @@ def test_add_packets_does_not_export_without_initial_syn(tmp_path):
 
     assert session.exported_count == 0
     assert not any(command[0] == "editcap" for command in runner.commands)
+
+
+def test_incomplete_flow_stats_reports_tls_progress(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    chunk = tmp_path / "chunk.pcapng"
+    chunk.write_bytes(b"chunk")
+    flow_key = FlowKey.from_packet("10.0.0.2", 53124, "198.51.100.10", 443)
+    config = CaptureConfig(
+        interface="en1",
+        pools_path=tmp_path / "pools.csv",
+        out_dir=out_dir,
+        target_flows=1,
+        tls_packets_per_flow=100,
+    )
+    session = CaptureSession(config, runner=FakeRunner())
+    pool = PoolConfig("supportxmr", "pool.supportxmr.com", 443)
+
+    session.add_packets(
+        pool,
+        [
+            TlsPacket(
+                chunk,
+                1,
+                1700000000.0,
+                flow_key,
+                is_tls=False,
+                is_initial_syn=True,
+            ),
+            TlsPacket(chunk, 2, 1700000001.0, flow_key),
+            TlsPacket(chunk, 3, 1700000002.0, flow_key),
+        ],
+        tmp_path,
+    )
+
+    assert session.incomplete_flow_stats(pool) == (1, 2)

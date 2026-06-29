@@ -34,6 +34,7 @@ def test_parse_args_defaults_to_task_capture_settings():
     assert args.out_dir.name == "shy_data_apple_m4"
     assert args.target_flows == 1000
     assert args.tls_packets_per_flow == 100
+    assert args.max_idle_seconds_per_pool == 1800
 
 
 def test_build_xmrig_command_uses_environment_values():
@@ -56,6 +57,9 @@ def test_build_xmrig_command_uses_environment_values():
         "48abc.catchtest",
     ]
     assert "--tls" in cmd
+    assert "--algo" in cmd
+    assert "rx/0" in cmd
+    assert "--keepalive" in cmd
     assert cmd[-2:] == ["--donate-level", "1"]
 
 

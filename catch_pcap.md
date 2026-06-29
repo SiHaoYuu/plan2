@@ -64,6 +64,8 @@ python3 tools/run_xmrig_capture.py --pool-index 3
 
 如果本地没有默认路径 `xmrig-6.26.0/xmrig`，脚本会按当前平台从 XMRig GitHub release 下载 v6.26.0 并解压到本地。也可以用 `XMRIG_PATH` 指向已经安装好的 XMRig。
 
+自动脚本默认给 XMRig 传 `--algo rx/0 --keepalive --tls`。挖矿连接的 TLS 包可能很稀疏，脚本默认会等待最长 `1800` 秒空闲窗口来凑满 `100` 个 TLS 包，并在日志里显示未完成 flow 当前最多累计了多少 TLS 包。
+
 如需覆盖默认配置，可显式传入完整参数：
 
 ```sh
@@ -135,9 +137,11 @@ shy_data_apple_m4/capture_manifest.jsonl
 - `--target-flows`：每个启用矿池的目标导出 flow 数，默认 `1000`。
 - `--tls-packets-per-flow`：每条 flow 导出的 TLS 包数，默认 `100`。
 - `--tls-display-filter`：TLS display filter，默认 `tls`。
-- `--chunk-seconds`：分段捕获时长，默认 `30`。
-- `--max-idle-seconds-per-pool`：某矿池长时间无新 flow 时切到下一个。
+- `--chunk-seconds`：分段捕获时长，自动脚本默认 `15`。
+- `--max-idle-seconds-per-pool`：某矿池长时间无 TLS 包时切到下一个，自动脚本默认 `1800`。
 - `--dry-run`：打印配置和计划，不实际抓包。
+- `XMR_ALGO`：可选环境变量，默认 `rx/0`。
+- `XMR_KEEPALIVE`：可选环境变量，默认 `1`。
 
 ## 使用前提
 

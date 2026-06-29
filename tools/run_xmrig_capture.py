@@ -42,6 +42,8 @@ XMRIG_RELEASE_BASE_URL = (
 DEFAULT_INTERFACE = "en1"
 DEFAULT_POOLS_PATH = Path("configs/xmr_pools.csv")
 DEFAULT_POOL_URL = "pool.supportxmr.com:443"
+DEFAULT_XMR_ALGO = "rx/0"
+DEFAULT_MAX_IDLE_SECONDS_PER_POOL = 1800
 
 
 def env_value(env: Mapping[str, str], name: str, default: str | None = None) -> str:
@@ -144,9 +146,16 @@ def build_xmrig_command(
     pool_url = pool_url_override or env_value(env, "XMR_POOL_URL", DEFAULT_POOL_URL)
     worker = env_value(env, "XMR_WORKER", "catchtest")
     password = env_value(env, "XMR_PASSWORD", "x")
+    algorithm = env_value(env, "XMR_ALGO", DEFAULT_XMR_ALGO)
     threads = env_value(env, "XMR_THREADS", "2")
     print_time = env_value(env, "XMR_PRINT_TIME", "30")
     cpu_priority = env_value(env, "XMR_CPU_PRIORITY", "0")
+    keepalive_enabled = env_value(env, "XMR_KEEPALIVE", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     tls_enabled = env_value(env, "XMR_TLS", "1").lower() not in {
         "0",
         "false",
@@ -162,8 +171,8 @@ def build_xmrig_command(
         f"{wallet}.{worker}",
         "-p",
         password,
-        "--coin",
-        "monero",
+        "--algo",
+        algorithm,
         "--threads",
         threads,
         "--cpu-priority",
@@ -171,6 +180,8 @@ def build_xmrig_command(
         "--print-time",
         print_time,
     ]
+    if keepalive_enabled:
+        cmd.append("--keepalive")
     if tls_enabled:
         cmd.append("--tls")
 
@@ -208,7 +219,9 @@ def print_required_env() -> None:
     print("  XMR_POOL_URL    可选，默认 pool.supportxmr.com:443")
     print("  XMR_WORKER      可选，默认 catchtest")
     print("  XMR_PASSWORD    可选，默认 x")
+    print(f"  XMR_ALGO        可选，默认 {DEFAULT_XMR_ALGO}")
     print("  XMR_THREADS     可选，默认 2")
+    print("  XMR_KEEPALIVE   可选，默认 1")
     print("  XMR_TLS         可选，默认 1")
     print("  XMR_PRINT_TIME  可选，默认 30")
     print("  XMR_CPU_PRIORITY 可选，默认 0")
@@ -296,7 +309,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-flows", type=int, default=1000)
     parser.add_argument("--tls-packets-per-flow", type=int, default=100)
     parser.add_argument("--chunk-seconds", type=int, default=15)
-    parser.add_argument("--max-idle-seconds-per-pool", type=int, default=60)
+    parser.add_argument(
+        "--max-idle-seconds-per-pool",
+        type=int,
+        default=DEFAULT_MAX_IDLE_SECONDS_PER_POOL,
+    )
     parser.add_argument(
         "--capture-warmup-seconds",
         type=float,
