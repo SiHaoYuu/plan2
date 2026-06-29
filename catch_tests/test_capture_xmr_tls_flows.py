@@ -265,6 +265,32 @@ def test_add_packets_does_not_export_without_initial_syn(tmp_path):
     assert not any(command[0] == "editcap" for command in runner.commands)
 
 
+def test_capture_chunk_filters_all_resolved_pool_addresses(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    runner = FakeRunner()
+    config = CaptureConfig(
+        interface="en1",
+        pools_path=tmp_path / "pools.csv",
+        out_dir=out_dir,
+        target_flows=1,
+        tls_packets_per_flow=2,
+    )
+    session = CaptureSession(config, runner=runner)
+
+    session.capture_chunk(
+        PoolConfig("supportxmr", "pool.supportxmr.com", 443),
+        ["141.94.96.71", "198.51.100.10"],
+        temp_root,
+    )
+
+    assert runner.commands[0][4] == (
+        "tcp and port 443 and (host 141.94.96.71 or host 198.51.100.10)"
+    )
+
+
 def test_incomplete_flow_stats_reports_tls_progress(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()

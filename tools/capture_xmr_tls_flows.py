@@ -446,14 +446,11 @@ class CaptureSession:
         )
 
         idle_seconds = 0
-        address_index = 0
         while (
             self.pool_exported_count(pool) < self.config.target_flows
             and idle_seconds < self.config.max_idle_seconds_per_pool
         ):
-            address = addresses[address_index % len(addresses)]
-            address_index += 1
-            chunk_path = self.capture_chunk(pool, address, temp_root)
+            chunk_path = self.capture_chunk(pool, addresses, temp_root)
             packets = self.read_tls_packets(chunk_path)
             self.add_packets(pool, packets, temp_root)
             active_flows, max_tls_packets = self.incomplete_flow_stats(pool)
@@ -474,7 +471,9 @@ class CaptureSession:
                     f"最多 {max_tls_packets}/{self.config.tls_packets_per_flow} 个 TLS 包"
                 )
 
-    def capture_chunk(self, pool: PoolConfig, address: str, temp_root: Path) -> Path:
+    def capture_chunk(
+        self, pool: PoolConfig, addresses: Sequence[str], temp_root: Path
+    ) -> Path:
         safe_name = sanitize_pool_name(pool.name)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         fd, raw_path = tempfile.mkstemp(
@@ -484,7 +483,8 @@ class CaptureSession:
         )
         os.close(fd)
         chunk_path = Path(raw_path)
-        capture_filter = f"tcp and host {address} and port {pool.port}"
+        host_filter = " or ".join(f"host {address}" for address in addresses)
+        capture_filter = f"tcp and port {pool.port} and ({host_filter})"
         cmd = [
             "dumpcap",
             "-i",
