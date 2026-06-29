@@ -27,6 +27,7 @@
 ## 文件与目录
 
 - `tools/capture_xmr_tls_flows.py`：在线采集脚本。
+- `tools/run_xmrig_capture.py`：自动准备 XMRig、启动矿池连接并同步采集完整 flow 的辅助脚本。
 - `configs/xmr_pools.csv`：矿池入口配置，字段为 `name,host,port,enabled,notes`。
 - `catch_tests/test_capture_xmr_tls_flows.py`：采集脚本的轻量单元测试，和 `feature/pcap` 的 `tests/` 目录分离。
 - `shy_data_apple_m4/`：默认输出目录，不应提交实际采集数据。
@@ -66,6 +67,8 @@ python3 tools/run_xmrig_capture.py \
   --target-flows 1000 \
   --tls-packets-per-flow 100
 ```
+
+如果本地没有默认路径 `xmrig-6.26.0/xmrig`，脚本会按当前平台从 XMRig GitHub release 下载 v6.26.0 并解压到本地。也可以用 `XMRIG_PATH` 指向已经安装好的 XMRig。
 
 ## 实现方式
 
@@ -134,6 +137,7 @@ shy_data_apple_m4/capture_manifest.jsonl
 - 用户负责启动矿工或连接程序来产生 XMR 矿池 TLS 流量。
 - `configs/xmr_pools.csv` 中的矿池入口在采集前需要复核，因为公开矿池地址和端口可能变化。
 - 输出目录 `shy_data_apple_m4/` 可写。
+- `xmrig-6.26.0/` 为本地工具目录，当前通过 `.gitignore` 排除，不随本仓库提交；缺失时由运行脚本从官方 GitHub release 下载。若以后要分发 XMRig 二进制，需要一并保留 GPLv3 许可证文本，并提供对应源码获取说明。
 
 ## 测试计划
 

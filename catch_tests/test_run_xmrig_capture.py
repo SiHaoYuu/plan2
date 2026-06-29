@@ -3,10 +3,13 @@ import pytest
 from tools.run_xmrig_capture import (
     build_xmrig_command,
     enabled_pools_from_args,
+    ensure_xmrig_available,
     mask_xmrig_command,
     mask_wallet,
     parse_pool_url,
     pool_url_source,
+    xmrig_asset_name,
+    xmrig_download_url,
 )
 
 
@@ -53,6 +56,42 @@ def test_build_xmrig_command_accepts_pool_override():
     )
 
     assert cmd[2] == "xmr.2miners.com:2222"
+
+
+def test_build_xmrig_command_accepts_xmrig_path_override():
+    cmd = build_xmrig_command(
+        {
+            "XMRIG_PATH": "missing-xmrig",
+            "XMR_WALLET": "48abc",
+        },
+        xmrig_path_override="xmrig-6.26.0/xmrig",
+    )
+
+    assert cmd[0] == "xmrig-6.26.0/xmrig"
+
+
+def test_xmrig_asset_name_supports_macos_arm64():
+    assert xmrig_asset_name("Darwin", "arm64") == "xmrig-6.26.0-macos-arm64.tar.gz"
+
+
+def test_xmrig_download_url_points_to_official_release_asset():
+    assert xmrig_download_url("xmrig-6.26.0-macos-arm64.tar.gz") == (
+        "https://github.com/xmrig/xmrig/releases/download/v6.26.0/"
+        "xmrig-6.26.0-macos-arm64.tar.gz"
+    )
+
+
+def test_ensure_xmrig_available_uses_existing_default_path(tmp_path):
+    xmrig_path = tmp_path / "xmrig-6.26.0" / "xmrig"
+    xmrig_path.parent.mkdir()
+    xmrig_path.write_text("fake", encoding="utf-8")
+
+    assert ensure_xmrig_available({}, repo_root=tmp_path) == "xmrig-6.26.0/xmrig"
+
+
+def test_ensure_xmrig_available_rejects_missing_custom_path(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        ensure_xmrig_available({"XMRIG_PATH": "custom/xmrig"}, repo_root=tmp_path)
 
 
 def test_mask_wallet_keeps_address_readable_without_printing_all():

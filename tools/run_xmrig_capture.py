@@ -6,13 +6,16 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import platform
 import shlex
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -30,7 +33,12 @@ from tools.capture_xmr_tls_flows import (
 )
 
 
-DEFAULT_XMRIG_PATH = Path("xmrig-6.26.0/xmrig")
+DEFAULT_XMRIG_VERSION = "6.26.0"
+DEFAULT_XMRIG_DIR = Path(f"xmrig-{DEFAULT_XMRIG_VERSION}")
+DEFAULT_XMRIG_PATH = DEFAULT_XMRIG_DIR / "xmrig"
+XMRIG_RELEASE_BASE_URL = (
+    f"https://github.com/xmrig/xmrig/releases/download/v{DEFAULT_XMRIG_VERSION}"
+)
 DEFAULT_POOL_URL = "pool.supportxmr.com:443"
 
 
@@ -59,10 +67,77 @@ def mask_wallet(wallet: str) -> str:
     return wallet[:8] + "..." + wallet[-6:]
 
 
+def xmrig_asset_name(
+    system: str | None = None, machine: str | None = None
+) -> str:
+    system = system or platform.system()
+    machine = (machine or platform.machine()).lower()
+    if system == "Darwin" and machine in {"arm64", "aarch64"}:
+        return f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-arm64.tar.gz"
+    if system == "Darwin" and machine in {"x86_64", "amd64"}:
+        return f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-x64.tar.gz"
+    if system == "Linux" and machine in {"x86_64", "amd64"}:
+        return f"xmrig-{DEFAULT_XMRIG_VERSION}-linux-static-x64.tar.gz"
+    raise ValueError(
+        f"当前平台暂未配置 XMRig 自动下载: system={system} machine={machine}"
+    )
+
+
+def xmrig_download_url(asset_name: str | None = None) -> str:
+    return f"{XMRIG_RELEASE_BASE_URL}/{asset_name or xmrig_asset_name()}"
+
+
+def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
+    dest_dir = dest_dir.resolve()
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            target_path = (dest_dir / member.name).resolve()
+            if dest_dir not in target_path.parents and target_path != dest_dir:
+                raise ValueError(f"压缩包包含不安全路径: {member.name}")
+        archive.extractall(dest_dir)
+
+
+def download_xmrig(dest_root: Path = REPO_ROOT) -> Path:
+    asset_name = xmrig_asset_name()
+    url = xmrig_download_url(asset_name)
+    archive_path = dest_root / asset_name
+    print(f"本地未找到 XMRig，开始下载: {url}")
+    try:
+        urllib.request.urlretrieve(url, archive_path)
+        safe_extract_tar(archive_path, dest_root)
+    finally:
+        if archive_path.exists():
+            archive_path.unlink()
+    xmrig_path = dest_root / DEFAULT_XMRIG_PATH
+    if not xmrig_path.exists():
+        raise FileNotFoundError(f"下载解压后仍未找到 XMRig: {xmrig_path}")
+    xmrig_path.chmod(xmrig_path.stat().st_mode | 0o755)
+    print(f"XMRig 已准备好: {DEFAULT_XMRIG_PATH}")
+    return xmrig_path
+
+
+def ensure_xmrig_available(env: Mapping[str, str], repo_root: Path = REPO_ROOT) -> str:
+    configured = env.get("XMRIG_PATH", str(DEFAULT_XMRIG_PATH)).strip()
+    if not configured:
+        configured = str(DEFAULT_XMRIG_PATH)
+    configured_path = Path(configured).expanduser()
+    check_path = configured_path if configured_path.is_absolute() else repo_root / configured_path
+    if check_path.exists():
+        return configured
+    if env.get("XMRIG_PATH", "").strip():
+        raise FileNotFoundError(f"XMRIG_PATH 指向的文件不存在: {configured}")
+    download_xmrig(repo_root)
+    return str(DEFAULT_XMRIG_PATH)
+
+
 def build_xmrig_command(
-    env: Mapping[str, str], pool_url_override: str | None = None
+    env: Mapping[str, str],
+    pool_url_override: str | None = None,
+    xmrig_path_override: str | None = None,
 ) -> list[str]:
-    xmrig_path = env_value(env, "XMRIG_PATH", str(DEFAULT_XMRIG_PATH))
+    xmrig_path = xmrig_path_override or env_value(
+        env, "XMRIG_PATH", str(DEFAULT_XMRIG_PATH)
+    )
     wallet = env_value(env, "XMR_WALLET")
     pool_url = pool_url_override or env_value(env, "XMR_POOL_URL", DEFAULT_POOL_URL)
     worker = env_value(env, "XMR_WORKER", "catchtest")
@@ -127,7 +202,7 @@ def mask_xmrig_command(cmd: Sequence[str], wallet: str) -> str:
 def print_required_env() -> None:
     print("需要你配置的环境变量:")
     print("  XMR_WALLET      必填，你自己的 XMR 钱包地址")
-    print("  XMRIG_PATH      可选，默认 xmrig-6.26.0/xmrig")
+    print("  XMRIG_PATH      可选，默认 xmrig-6.26.0/xmrig；缺失时自动下载")
     print("  XMR_POOL_URL    可选，默认 pool.supportxmr.com:443")
     print("  XMR_WORKER      可选，默认 catchtest")
     print("  XMR_PASSWORD    可选，默认 x")
@@ -328,9 +403,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         pools = enabled_pools_from_args(args, os.environ)
         wallet = env_value(os.environ, "XMR_WALLET")
+        xmrig_path = ensure_xmrig_available(os.environ)
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         print_required_env()
+        return 2
+    except FileNotFoundError as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
         return 2
 
     with tempfile.TemporaryDirectory(prefix="xmr_capture_") as temp_dir:
@@ -341,12 +420,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(f"矿池来源: {args.pools}")
         print(f"钱包: {mask_wallet(wallet)}")
+        print(f"XMRig 路径: {xmrig_path}")
         print(f"抓包输出目录: {args.out_dir}")
         print(f"每个矿池目标 flow 数: {args.target_flows}")
 
         for pool in pools:
             pool_url = f"{pool.host}:{pool.port}"
-            xmrig_cmd = build_xmrig_command(os.environ, pool_url_override=pool_url)
+            xmrig_cmd = build_xmrig_command(
+                os.environ,
+                pool_url_override=pool_url,
+                xmrig_path_override=xmrig_path,
+            )
             print(f"矿池: {pool.name} {pool_url}")
             print(f"XMRig: {xmrig_cmd[0]}")
             print(f"XMRig 命令: {mask_xmrig_command(xmrig_cmd, wallet)}")
