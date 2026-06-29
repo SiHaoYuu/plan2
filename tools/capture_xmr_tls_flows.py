@@ -552,46 +552,77 @@ class CaptureSession:
         sequence = self.pool_sequence(pool)
         output_path = self.config.out_dir / f"{safe_name}_{sequence:06d}.pcap"
         merged_path = temp_root / f"{safe_name}_{sequence:06d}_merged.pcapng"
-
-        chunks = state.chunks
-        if len(chunks) == 1:
-            merged_path = chunks[0]
-        else:
-            self.runner.run(["mergecap", "-w", str(merged_path), *map(str, chunks)])
-
-        stop_frame = tls_packets[self.config.tls_packets_per_flow - 1].frame_number
-        display_filter = (
-            f"{state.key.tcp_display_filter()} and "
-            f"frame.number >= {initial_syn.frame_number} and "
-            f"frame.number <= {stop_frame}"
+        stop_packet = tls_packets[self.config.tls_packets_per_flow - 1]
+        extracted_chunks = self.extract_flow_chunks(
+            pool, state, initial_syn, stop_packet, temp_root, sequence
         )
-        frame_output = self.runner.run(
-            frame_number_command(
-                merged_path, display_filter, self.config.tls_packets_per_flow
-            ),
-            capture_text=True,
-        )
-        frames = parse_frame_numbers(frame_output)
-        if not frames:
-            raise RuntimeError(
-                f"合并后没有找到从 SYN 到第 "
-                f"{self.config.tls_packets_per_flow} 个 TLS 包的 TCP frame: {state.key}"
+
+        if len(extracted_chunks) == 1:
+            self.runner.run(
+                ["editcap", "-F", "pcap", str(extracted_chunks[0]), str(output_path)]
             )
-
-        self.runner.run(
-            [
-                "editcap",
-                "-F",
-                "pcap",
-                "-r",
-                str(merged_path),
-                str(output_path),
-                *frames,
-            ]
-        )
+        else:
+            self.runner.run(
+                ["mergecap", "-w", str(merged_path), *map(str, extracted_chunks)]
+            )
+            self.runner.run(["editcap", "-F", "pcap", str(merged_path), str(output_path)])
         self.write_manifest(pool, state, output_path)
         print(f"已导出 flow: {output_path}")
         return output_path
+
+    def extract_flow_chunks(
+        self,
+        pool: PoolConfig,
+        state: FlowState,
+        initial_syn: TlsPacket,
+        stop_packet: TlsPacket,
+        temp_root: Path,
+        sequence: int,
+    ) -> list[Path]:
+        safe_name = sanitize_pool_name(pool.name)
+        extracted_chunks: list[Path] = []
+        for index, chunk_path in enumerate(state.chunks, start=1):
+            display_filter = self.flow_chunk_display_filter(
+                state.key, chunk_path, initial_syn, stop_packet
+            )
+            frame_output = self.runner.run(
+                frame_number_command(
+                    chunk_path, display_filter, self.config.tls_packets_per_flow
+                ),
+                capture_text=True,
+            )
+            frames = parse_frame_numbers(frame_output)
+            if not frames:
+                continue
+
+            extracted_path = (
+                temp_root / f"{safe_name}_{sequence:06d}_{index:04d}_flow.pcapng"
+            )
+            self.runner.run(
+                ["editcap", "-r", str(chunk_path), str(extracted_path), *frames]
+            )
+            extracted_chunks.append(extracted_path)
+
+        if not extracted_chunks:
+            raise RuntimeError(
+                f"没有找到从 SYN 到第 "
+                f"{self.config.tls_packets_per_flow} 个 TLS 包的 TCP frame: {state.key}"
+            )
+        return extracted_chunks
+
+    def flow_chunk_display_filter(
+        self,
+        flow_key: FlowKey,
+        chunk_path: Path,
+        initial_syn: TlsPacket,
+        stop_packet: TlsPacket,
+    ) -> str:
+        filters = [flow_key.tcp_display_filter()]
+        if chunk_path == initial_syn.chunk_path:
+            filters.append(f"frame.number >= {initial_syn.frame_number}")
+        if chunk_path == stop_packet.chunk_path:
+            filters.append(f"frame.number <= {stop_packet.frame_number}")
+        return " and ".join(filters)
 
     def write_manifest(self, pool: PoolConfig, state: FlowState, output_path: Path) -> None:
         manifest_path = self.config.out_dir / "capture_manifest.jsonl"

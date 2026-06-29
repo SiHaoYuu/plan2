@@ -138,7 +138,7 @@ def test_pool_name_sanitization_and_sequence_manifest(tmp_path):
     assert manifest["flow"]["left"]["host"] == "10.0.0.2"
 
 
-def test_export_flow_uses_mergecap_and_editcap_with_first_tls_frames(tmp_path):
+def test_export_flow_extracts_frames_before_merging_chunks(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     chunk1 = tmp_path / "chunk1.pcapng"
@@ -161,7 +161,7 @@ def test_export_flow_uses_mergecap_and_editcap_with_first_tls_frames(tmp_path):
             TlsPacket(chunk2, 5, 1700000002.0, flow_key),
         ],
     )
-    runner = FakeRunner(responses=["1\n2\n3\n4\n5\n"])
+    runner = FakeRunner(responses=["1\n2\n3\n", "1\n2\n3\n4\n5\n"])
     config = CaptureConfig(
         interface="en1",
         pools_path=tmp_path / "pools.csv",
@@ -175,21 +175,38 @@ def test_export_flow_uses_mergecap_and_editcap_with_first_tls_frames(tmp_path):
     output_path = session.export_flow(pool, state, tmp_path)
 
     assert output_path == out_dir / "supportxmr_000001.pcap"
-    assert runner.commands[0][:3] == [
+    assert runner.commands[0][:3] == ["tshark", "-r", str(chunk1)]
+    assert "frame.number >= 1" in runner.commands[0][4]
+    assert "frame.number <= 5" not in runner.commands[0][4]
+    assert runner.commands[1][:4] == [
+        "editcap",
+        "-r",
+        str(chunk1),
+        str(tmp_path / "supportxmr_000001_0001_flow.pcapng"),
+    ]
+    assert runner.commands[1][-3:] == ["1", "2", "3"]
+    assert runner.commands[2][:3] == ["tshark", "-r", str(chunk2)]
+    assert "frame.number >= 1" not in runner.commands[2][4]
+    assert "frame.number <= 5" in runner.commands[2][4]
+    assert runner.commands[3][:4] == [
+        "editcap",
+        "-r",
+        str(chunk2),
+        str(tmp_path / "supportxmr_000001_0002_flow.pcapng"),
+    ]
+    assert runner.commands[3][-5:] == ["1", "2", "3", "4", "5"]
+    assert runner.commands[4][:3] == [
         "mergecap",
         "-w",
         str(tmp_path / "supportxmr_000001_merged.pcapng"),
     ]
-    assert runner.commands[2][:5] == [
+    assert runner.commands[5] == [
         "editcap",
         "-F",
         "pcap",
-        "-r",
         str(tmp_path / "supportxmr_000001_merged.pcapng"),
+        str(output_path),
     ]
-    assert "frame.number >= 1" in runner.commands[1][4]
-    assert "frame.number <= 5" in runner.commands[1][4]
-    assert runner.commands[2][-5:] == ["1", "2", "3", "4", "5"]
 
 
 def test_add_packets_tracks_target_and_sequence_per_pool(tmp_path):
@@ -244,7 +261,11 @@ def test_add_packets_tracks_target_and_sequence_per_pool(tmp_path):
         tmp_path,
     )
 
-    editcap_outputs = [command[5] for command in runner.commands if command[0] == "editcap"]
+    editcap_outputs = [
+        command[4]
+        for command in runner.commands
+        if command[:3] == ["editcap", "-F", "pcap"]
+    ]
     assert str(out_dir / "supportxmr_000003.pcap") in editcap_outputs
     assert str(out_dir / "nanopool_000005.pcap") in editcap_outputs
     assert session.exported_counts_by_pool == {"supportxmr": 1, "nanopool": 1}
