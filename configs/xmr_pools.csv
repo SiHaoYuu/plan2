@@ -1,15 +1,15 @@
 name,host,port,enabled,notes
-supportxmr,pool.supportxmr.com,443,true,Public SupportXMR TLS/SSL endpoint; verify before capture
-supportxmr,pool.supportxmr.com,9000,true,Common SupportXMR SSL mining port; verify before capture
-nanopool,xmr-eu1.nanopool.org,10343,true,Nanopool EU SSL/TLS endpoint; verify before capture
-nanopool,xmr-eu2.nanopool.org,10343,true,Nanopool EU SSL/TLS endpoint; verify before capture
-nanopool,xmr-us-east1.nanopool.org,10343,true,Nanopool US East SSL/TLS endpoint; verify before capture
-nanopool,xmr-us-west1.nanopool.org,10343,true,Nanopool US West SSL/TLS endpoint; verify before capture
-nanopool,xmr-asia1.nanopool.org,10343,true,Nanopool Asia SSL/TLS endpoint; verify before capture
-nanopool,xmr-jp1.nanopool.org,10343,true,Nanopool Japan SSL/TLS endpoint; verify before capture
-nanopool,xmr-au1.nanopool.org,10343,true,Nanopool Australia SSL/TLS endpoint; verify before capture
-hashvault,pool.hashvault.pro,443,true,HashVault TLS endpoint; verify before capture
-hashvault,pool.hashvault.pro,9999,true,HashVault SSL endpoint; verify before capture
+supportxmr_443,pool.supportxmr.com,443,true,Public SupportXMR TLS/SSL endpoint; verify before capture
+supportxmr_9000,pool.supportxmr.com,9000,true,Common SupportXMR SSL mining port; verify before capture
+nanopool_eu1,xmr-eu1.nanopool.org,10343,true,Nanopool EU SSL/TLS endpoint; verify before capture
+nanopool_eu2,xmr-eu2.nanopool.org,10343,true,Nanopool EU SSL/TLS endpoint; verify before capture
+nanopool_us_east1,xmr-us-east1.nanopool.org,10343,true,Nanopool US East SSL/TLS endpoint; verify before capture
+nanopool_us_west1,xmr-us-west1.nanopool.org,10343,true,Nanopool US West SSL/TLS endpoint; verify before capture
+nanopool_asia1,xmr-asia1.nanopool.org,10343,true,Nanopool Asia SSL/TLS endpoint; verify before capture
+nanopool_jp1,xmr-jp1.nanopool.org,10343,true,Nanopool Japan SSL/TLS endpoint; verify before capture
+nanopool_au1,xmr-au1.nanopool.org,10343,true,Nanopool Australia SSL/TLS endpoint; verify before capture
+hashvault_443,pool.hashvault.pro,443,true,HashVault TLS endpoint; verify before capture
+hashvault_9999,pool.hashvault.pro,9999,true,HashVault SSL endpoint; verify before capture
 2miners,xmr.2miners.com,2222,true,2Miners SSL endpoint; verify before capture
-herominers,monero.herominers.com,1111,true,HeroMiners SSL endpoint; verify before capture
-herominers,monero.herominers.com,10191,true,HeroMiners SSL endpoint; verify before capture
+herominers_1111,monero.herominers.com,1111,true,HeroMiners SSL endpoint; verify before capture
+herominers_10191,monero.herominers.com,10191,true,HeroMiners SSL endpoint; verify before capture

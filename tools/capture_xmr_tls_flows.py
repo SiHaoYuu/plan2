@@ -38,7 +38,8 @@ class Endpoint:
     port: int
 
     def as_display_filter(self, src: bool) -> str:
-        host_field = "ip.src" if src else "ip.dst"
+        ip_prefix = "ipv6" if ":" in self.host else "ip"
+        host_field = f"{ip_prefix}.src" if src else f"{ip_prefix}.dst"
         port_field = "tcp.srcport" if src else "tcp.dstport"
         return f"({host_field} == {self.host} and {port_field} == {self.port})"
 
@@ -58,6 +59,9 @@ class FlowKey:
         return cls(endpoints[0], endpoints[1])
 
     def display_filter(self, tls_filter: str) -> str:
+        return f"{tls_filter} and ({self.tcp_display_filter()})"
+
+    def tcp_display_filter(self) -> str:
         left_to_right = (
             f"{self.left.as_display_filter(src=True)} and "
             f"{self.right.as_display_filter(src=False)}"
@@ -66,7 +70,7 @@ class FlowKey:
             f"{self.right.as_display_filter(src=True)} and "
             f"{self.left.as_display_filter(src=False)}"
         )
-        return f"{tls_filter} and (({left_to_right}) or ({right_to_left}))"
+        return f"(({left_to_right}) or ({right_to_left}))"
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -81,6 +85,8 @@ class TlsPacket:
     frame_number: int
     time_epoch: float
     flow_key: FlowKey
+    is_tls: bool = True
+    is_initial_syn: bool = False
 
 
 @dataclass
@@ -107,9 +113,21 @@ class FlowState:
 
     @property
     def end_time_epoch(self) -> float | None:
-        if not self.packets:
+        tls_packets = self.tls_packets
+        if not tls_packets:
             return None
-        return self.packets[-1].time_epoch
+        return tls_packets[-1].time_epoch
+
+    @property
+    def initial_syn_packet(self) -> TlsPacket | None:
+        for packet in self.packets:
+            if packet.is_initial_syn:
+                return packet
+        return None
+
+    @property
+    def tls_packets(self) -> list[TlsPacket]:
+        return [packet for packet in self.packets if packet.is_tls]
 
 
 @dataclass
@@ -131,17 +149,21 @@ class CommandRunner:
         self.dry_run = dry_run
 
     def run(self, cmd: Sequence[str], capture_text: bool = False) -> str:
-        print("+ " + shlex.join(str(part) for part in cmd))
+        print("执行命令: " + shlex.join(str(part) for part in cmd))
         if self.dry_run:
             return ""
         result = subprocess.run(
             list(cmd),
             check=True,
             text=True,
-            stdout=subprocess.PIPE if capture_text else None,
-            stderr=subprocess.PIPE if capture_text else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
-        return result.stdout if capture_text else ""
+        if capture_text:
+            return result.stdout
+        for line in result.stdout.splitlines():
+            print(f"工具输出: {line}")
+        return ""
 
 
 def utc_now_iso() -> str:
@@ -163,8 +185,8 @@ def read_pools(path: Path) -> list[PoolConfig]:
             missing = required - set(reader.fieldnames or [])
             extra = set(reader.fieldnames or []) - required
             raise ValueError(
-                f"{path} must have columns name,host,port,enabled,notes; "
-                f"missing={sorted(missing)} extra={sorted(extra)}"
+                f"{path} 必须包含列 name,host,port,enabled,notes；"
+                f"缺失={sorted(missing)} 多余={sorted(extra)}"
             )
         for row in reader:
             enabled = row["enabled"].strip().lower() in TRUE_VALUES
@@ -194,8 +216,20 @@ def sanitize_pool_name(name: str) -> str:
     return value or "pool"
 
 
-def next_global_sequence(out_dir: Path) -> int:
-    pattern = re.compile(r".*_(\d{6})\.pcap$")
+def validate_unique_pool_slugs(pools: Sequence[PoolConfig]) -> None:
+    seen: dict[str, str] = {}
+    for pool in pools:
+        slug = sanitize_pool_name(pool.name)
+        if slug in seen:
+            raise ValueError(
+                f"矿池名称会生成重复文件名前缀 {slug!r}: "
+                f"{seen[slug]!r} 和 {pool.name!r}"
+            )
+        seen[slug] = pool.name
+
+
+def next_pool_sequence(out_dir: Path, pool_slug: str) -> int:
+    pattern = re.compile(rf"{re.escape(pool_slug)}_(\d{{6}})\.pcap$")
     highest = 0
     if not out_dir.exists():
         return 1
@@ -222,12 +256,19 @@ def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
         fields = line.rstrip("\n").split("\t")
         if len(fields) == 6:
             frame, time_epoch, src_host, src_port, dst_host, dst_port = fields
+            is_tls = True
+            is_initial_syn = False
         elif len(fields) >= 8:
             frame, time_epoch, ip_src, ipv6_src, src_port, ip_dst, ipv6_dst, dst_port = (
                 fields[:8]
             )
             src_host = ip_src or ipv6_src
             dst_host = ip_dst or ipv6_dst
+            syn_value = fields[8] if len(fields) > 8 else ""
+            ack_value = fields[9] if len(fields) > 9 else ""
+            protocols = fields[10] if len(fields) > 10 else "tls"
+            is_initial_syn = syn_value == "1" and ack_value == "0"
+            is_tls = ":tls" in protocols or protocols == "tls"
         else:
             raise ValueError(f"unexpected tshark TLS field row: {line!r}")
         if not src_host or not dst_host or not src_port or not dst_port:
@@ -239,18 +280,24 @@ def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
                 frame_number=int(frame),
                 time_epoch=float(time_epoch),
                 flow_key=flow_key,
+                is_tls=is_tls,
+                is_initial_syn=is_initial_syn,
             )
         )
     return packets
 
 
 def tshark_tls_field_command(pcap_path: Path, display_filter: str) -> list[str]:
+    tracked_filter = (
+        f"tcp and (({display_filter}) or "
+        "(tcp.flags.syn == 1 and tcp.flags.ack == 0))"
+    )
     return [
         "tshark",
         "-r",
         str(pcap_path),
         "-Y",
-        display_filter,
+        tracked_filter,
         "-T",
         "fields",
         "-e",
@@ -269,6 +316,12 @@ def tshark_tls_field_command(pcap_path: Path, display_filter: str) -> list[str]:
         "ipv6.dst",
         "-e",
         "tcp.dstport",
+        "-e",
+        "tcp.flags.syn",
+        "-e",
+        "tcp.flags.ack",
+        "-e",
+        "frame.protocols",
         "-E",
         "separator=\t",
         "-E",
@@ -297,8 +350,10 @@ def frame_number_command(
     ]
 
 
-def parse_frame_numbers(output: str, limit: int) -> list[str]:
+def parse_frame_numbers(output: str, limit: int | None = None) -> list[str]:
     numbers = [line.strip() for line in output.splitlines() if line.strip()]
+    if limit is None:
+        return numbers
     return numbers[:limit]
 
 
@@ -306,15 +361,17 @@ class CaptureSession:
     def __init__(self, config: CaptureConfig, runner: CommandRunner | None = None) -> None:
         self.config = config
         self.runner = runner or CommandRunner(dry_run=config.dry_run)
-        self.flows: dict[FlowKey, FlowState] = {}
+        self.flows: dict[tuple[str, FlowKey], FlowState] = {}
         self.exported_count = 0
-        self.sequence = next_global_sequence(config.out_dir)
+        self.exported_counts_by_pool: dict[str, int] = {}
+        self.sequences_by_pool: dict[str, int] = {}
 
     def run(self) -> None:
         pools = [pool for pool in read_pools(self.config.pools_path) if pool.enabled]
         if not pools:
-            raise ValueError(f"no enabled pools in {self.config.pools_path}")
-        print(f"loaded {len(pools)} enabled pools")
+            raise ValueError(f"{self.config.pools_path} 中没有启用的矿池")
+        validate_unique_pool_slugs(pools)
+        print(f"已读取 {len(pools)} 个启用矿池")
         if self.config.dry_run:
             self._print_dry_run_preview(pools)
             return
@@ -323,48 +380,78 @@ class CaptureSession:
         temp_root = self.config.temp_dir or self.config.out_dir / ".capture_tmp"
         temp_root.mkdir(parents=True, exist_ok=True)
 
-        while self.exported_count < self.config.target_flows:
-            made_progress = False
-            for pool in pools:
-                exported_before = self.exported_count
-                self.capture_pool(pool, temp_root)
-                made_progress = made_progress or self.exported_count > exported_before
-                if self.exported_count >= self.config.target_flows:
-                    break
-            if not made_progress:
-                print("completed one polling pass without new exported flows")
+        for pool in pools:
+            if self.pool_exported_count(pool) >= self.config.target_flows:
+                continue
+            self.capture_pool(pool, temp_root)
+            if self.pool_exported_count(pool) < self.config.target_flows:
+                print(
+                    f"矿池 {pool.name} 当前导出 "
+                    f"{self.pool_exported_count(pool)}/{self.config.target_flows} 条 flow，"
+                    "已达到空闲上限，切换到下一个矿池"
+                )
 
     def _print_dry_run_preview(self, pools: Sequence[PoolConfig]) -> None:
-        print(f"out_dir={self.config.out_dir}")
-        print(f"target_flows={self.config.target_flows}")
-        print(f"tls_packets_per_flow={self.config.tls_packets_per_flow}")
+        print(f"输出目录: {self.config.out_dir}")
+        print(f"每个矿池目标 flow 数: {self.config.target_flows}")
+        print(f"每条 flow 的 TLS 包数: {self.config.tls_packets_per_flow}")
         for pool in pools:
-            print(f"pool={pool.name} host={pool.host} port={pool.port}")
+            print(f"矿池: {pool.name} host={pool.host} port={pool.port}")
+
+    def pool_slug(self, pool: PoolConfig) -> str:
+        return sanitize_pool_name(pool.name)
+
+    def pool_exported_count(self, pool: PoolConfig) -> int:
+        return self.exported_counts_by_pool.get(self.pool_slug(pool), 0)
+
+    def pool_sequence(self, pool: PoolConfig) -> int:
+        slug = self.pool_slug(pool)
+        if slug not in self.sequences_by_pool:
+            self.sequences_by_pool[slug] = next_pool_sequence(self.config.out_dir, slug)
+        return self.sequences_by_pool[slug]
 
     def capture_pool(self, pool: PoolConfig, temp_root: Path) -> None:
         try:
             addresses = resolve_host(pool.host)
         except socket.gaierror as exc:
-            print(f"skip {pool.name}: cannot resolve {pool.host}: {exc}", file=sys.stderr)
+            print(
+                f"跳过 {pool.name}: 无法解析 {pool.host}: {exc}",
+                file=sys.stderr,
+            )
             return
         if not addresses:
-            print(f"skip {pool.name}: no addresses resolved for {pool.host}", file=sys.stderr)
+            print(
+                f"跳过 {pool.name}: {pool.host} 没有解析到地址",
+                file=sys.stderr,
+            )
             return
+        print(
+            f"开始监听矿池 {pool.name} ({pool.host}:{pool.port})，"
+            f"解析地址: {', '.join(addresses)}"
+        )
 
         idle_seconds = 0
         address_index = 0
-        while idle_seconds < self.config.max_idle_seconds_per_pool:
+        while (
+            self.pool_exported_count(pool) < self.config.target_flows
+            and idle_seconds < self.config.max_idle_seconds_per_pool
+        ):
             address = addresses[address_index % len(addresses)]
             address_index += 1
             chunk_path = self.capture_chunk(pool, address, temp_root)
             packets = self.read_tls_packets(chunk_path)
             if packets:
                 idle_seconds = 0
+                print(
+                    f"本分片识别到 {len(packets)} 个 TLS 包，"
+                    f"当前已跟踪 {len(self.flows)} 条双向 flow"
+                )
             else:
                 idle_seconds += self.config.chunk_seconds
+                print(
+                    f"本分片没有 TLS 包，矿池空闲累计 {idle_seconds} 秒"
+                )
             self.add_packets(pool, packets, temp_root)
-            if self.exported_count >= self.config.target_flows:
-                break
 
     def capture_chunk(self, pool: PoolConfig, address: str, temp_root: Path) -> Path:
         safe_name = sanitize_pool_name(pool.name)
@@ -399,23 +486,47 @@ class CaptureSession:
     def add_packets(
         self, pool: PoolConfig, packets: Iterable[TlsPacket], temp_root: Path
     ) -> None:
+        pool_slug = self.pool_slug(pool)
         for packet in packets:
-            state = self.flows.setdefault(packet.flow_key, FlowState(packet.flow_key))
+            state = self.flows.setdefault(
+                (pool_slug, packet.flow_key), FlowState(packet.flow_key)
+            )
             if state.exported:
                 continue
             state.packets.append(packet)
-            if len(state.packets) >= self.config.tls_packets_per_flow:
+            if (
+                state.initial_syn_packet is not None
+                and len(state.tls_packets) >= self.config.tls_packets_per_flow
+            ):
                 self.export_flow(pool, state, temp_root)
                 state.exported = True
+                self.exported_counts_by_pool[pool_slug] = (
+                    self.exported_counts_by_pool.get(pool_slug, 0) + 1
+                )
                 self.exported_count += 1
-                self.sequence += 1
-                if self.exported_count >= self.config.target_flows:
+                self.sequences_by_pool[pool_slug] = self.pool_sequence(pool) + 1
+                print(
+                    f"{pool.name} 已导出 "
+                    f"{self.pool_exported_count(pool)}/{self.config.target_flows} 条 flow"
+                )
+                if self.pool_exported_count(pool) >= self.config.target_flows:
                     break
 
     def export_flow(self, pool: PoolConfig, state: FlowState, temp_root: Path) -> Path:
+        initial_syn = state.initial_syn_packet
+        tls_packets = state.tls_packets
+        if initial_syn is None:
+            raise RuntimeError(f"flow 缺少初始 TCP SYN，不能导出: {state.key}")
+        if len(tls_packets) < self.config.tls_packets_per_flow:
+            raise RuntimeError(
+                f"flow 只有 {len(tls_packets)} 个 TLS 包，"
+                f"不足 {self.config.tls_packets_per_flow}: {state.key}"
+            )
+
         safe_name = sanitize_pool_name(pool.name)
-        output_path = self.config.out_dir / f"{safe_name}_{self.sequence:06d}.pcap"
-        merged_path = temp_root / f"{safe_name}_{self.sequence:06d}_merged.pcapng"
+        sequence = self.pool_sequence(pool)
+        output_path = self.config.out_dir / f"{safe_name}_{sequence:06d}.pcap"
+        merged_path = temp_root / f"{safe_name}_{sequence:06d}_merged.pcapng"
 
         chunks = state.chunks
         if len(chunks) == 1:
@@ -423,17 +534,23 @@ class CaptureSession:
         else:
             self.runner.run(["mergecap", "-w", str(merged_path), *map(str, chunks)])
 
-        display_filter = state.key.display_filter(self.config.tls_display_filter)
+        stop_frame = tls_packets[self.config.tls_packets_per_flow - 1].frame_number
+        display_filter = (
+            f"{state.key.tcp_display_filter()} and "
+            f"frame.number >= {initial_syn.frame_number} and "
+            f"frame.number <= {stop_frame}"
+        )
         frame_output = self.runner.run(
             frame_number_command(
                 merged_path, display_filter, self.config.tls_packets_per_flow
             ),
             capture_text=True,
         )
-        frames = parse_frame_numbers(frame_output, self.config.tls_packets_per_flow)
-        if len(frames) < self.config.tls_packets_per_flow:
+        frames = parse_frame_numbers(frame_output)
+        if not frames:
             raise RuntimeError(
-                f"only found {len(frames)} TLS frames after merge for {state.key}"
+                f"合并后没有找到从 SYN 到第 "
+                f"{self.config.tls_packets_per_flow} 个 TLS 包的 TCP frame: {state.key}"
             )
 
         self.runner.run(
@@ -448,7 +565,7 @@ class CaptureSession:
             ]
         )
         self.write_manifest(pool, state, output_path)
-        print(f"exported {output_path}")
+        print(f"已导出 flow: {output_path}")
         return output_path
 
     def write_manifest(self, pool: PoolConfig, state: FlowState, output_path: Path) -> None:
@@ -459,6 +576,17 @@ class CaptureSession:
             "port": pool.port,
             "flow": state.key.to_json(),
             "tls_packets": self.config.tls_packets_per_flow,
+            "complete_tcp_start": state.initial_syn_packet is not None,
+            "initial_syn_frame": (
+                state.initial_syn_packet.frame_number
+                if state.initial_syn_packet is not None
+                else None
+            ),
+            "last_tls_frame": (
+                state.tls_packets[self.config.tls_packets_per_flow - 1].frame_number
+                if len(state.tls_packets) >= self.config.tls_packets_per_flow
+                else None
+            ),
             "output_file": str(output_path),
             "sha256": sha256_file(output_path) if output_path.exists() else None,
             "start_time": epoch_to_iso(state.start_time_epoch),
@@ -471,20 +599,20 @@ class CaptureSession:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Capture XMR pool TLS flows into fixed-size per-flow pcap files."
+        description="采集 XMR 矿池 TLS flow，并导出固定 TLS 包数的 pcap 文件。"
     )
-    parser.add_argument("--interface", required=True, help="capture interface, e.g. en1")
+    parser.add_argument("--interface", required=True, help="抓包网卡，例如 en1")
     parser.add_argument(
         "--pools",
         type=Path,
         default=Path("configs/xmr_pools.csv"),
-        help="CSV with name,host,port,enabled,notes",
+        help="矿池 CSV，字段为 name,host,port,enabled,notes",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
         default=Path("shy_data_apple_m4"),
-        help="output directory for pcap files and capture_manifest.jsonl",
+        help="pcap 文件和 capture_manifest.jsonl 的输出目录",
     )
     parser.add_argument("--target-flows", type=int, default=1000)
     parser.add_argument("--tls-packets-per-flow", type=int, default=100)
