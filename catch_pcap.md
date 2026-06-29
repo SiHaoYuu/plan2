@@ -22,7 +22,7 @@
 - `100` 个数据包：可能包含 TCP ACK、重传、DNS、握手和其他被捕获包。
 - `100` 个 TLS 数据包：只统计 Wireshark display filter 命中 `tls` 的包。
 
-本分支以后者为准。导出的 flow 文件包含该 TCP flow 从初始 SYN 到第 `100` 个 TLS 包之间的全部 frame，用于保留完整握手过程。
+本分支以后者为准。导出的 flow 文件默认只包含该 flow 的前 `100` 个 TLS frame，用于严格满足数据口径。
 
 ## 文件与目录
 
@@ -64,11 +64,8 @@ python3 tools/run_xmrig_capture.py \
   --pools configs/xmr_pools.csv \
   --out-dir shy_data_apple_m4 \
   --target-flows 1000 \
-  --parallel-pools 4 \
   --tls-packets-per-flow 100
 ```
-
-`--parallel-pools 4` 表示同时跑 4 个矿池。每个矿池内部仍然按完整握手 flow 串行采集，避免把同一条长连接拆成多个伪 flow。
 
 ## 实现方式
 
@@ -124,7 +121,6 @@ shy_data_apple_m4/capture_manifest.jsonl
 ## 主要参数
 
 - `--target-flows`：每个启用矿池的目标导出 flow 数，默认 `1000`。
-- `--parallel-pools`：自动 XMRig 模式下同时采集的矿池数量，例如 `4`。
 - `--tls-packets-per-flow`：每条 flow 导出的 TLS 包数，默认 `100`。
 - `--tls-display-filter`：TLS display filter，默认 `tls`。
 - `--chunk-seconds`：分段捕获时长，默认 `30`。

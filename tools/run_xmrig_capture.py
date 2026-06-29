@@ -13,7 +13,6 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -208,12 +207,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--out-dir", type=Path, default=Path("shy_data_apple_m4"))
     parser.add_argument("--target-flows", type=int, default=1000)
-    parser.add_argument(
-        "--parallel-pools",
-        type=int,
-        default=1,
-        help="同时采集的矿池数量；例如 4 表示同时跑 4 个矿池",
-    )
     parser.add_argument("--tls-packets-per-flow", type=int, default=100)
     parser.add_argument("--chunk-seconds", type=int, default=15)
     parser.add_argument("--max-idle-seconds-per-pool", type=int, default=60)
@@ -323,46 +316,6 @@ def capture_one_pool(
         exported_for_pool += session.exported_count
 
 
-def capture_pool_from_config(
-    args: argparse.Namespace,
-    pool: PoolConfig,
-    wallet: str,
-    temp_path: Path,
-) -> None:
-    pool_url = f"{pool.host}:{pool.port}"
-    xmrig_cmd = build_xmrig_command(os.environ, pool_url_override=pool_url)
-    print(f"矿池: {pool.name} {pool_url}")
-    print(f"{pool.name} XMRig: {xmrig_cmd[0]}")
-    print(f"{pool.name} XMRig 命令: {mask_xmrig_command(xmrig_cmd, wallet)}")
-    if args.dry_run:
-        print(f"{pool.name} 预演模式：不启动 XMRig，不实际抓包。")
-    capture_one_pool(args, pool, xmrig_cmd, temp_path)
-
-
-def capture_pools(
-    args: argparse.Namespace,
-    pools: Sequence[PoolConfig],
-    wallet: str,
-    temp_path: Path,
-) -> None:
-    parallel_pools = min(args.parallel_pools, len(pools))
-    if parallel_pools <= 1:
-        for pool in pools:
-            capture_pool_from_config(args, pool, wallet, temp_path)
-        return
-
-    print(f"并发矿池数: {parallel_pools}")
-    with ThreadPoolExecutor(max_workers=parallel_pools) as executor:
-        futures = {
-            executor.submit(capture_pool_from_config, args, pool, wallet, temp_path): pool
-            for pool in pools
-        }
-        for future in as_completed(futures):
-            pool = futures[future]
-            future.result()
-            print(f"矿池 {pool.name} 采集任务结束")
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.print_env_help:
@@ -370,9 +323,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if not args.interface:
         print("配置错误: 必须传入 --interface，例如 --interface en1", file=sys.stderr)
-        return 2
-    if args.parallel_pools < 1:
-        print("配置错误: --parallel-pools 必须大于等于 1", file=sys.stderr)
         return 2
 
     try:
@@ -393,8 +343,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"钱包: {mask_wallet(wallet)}")
         print(f"抓包输出目录: {args.out_dir}")
         print(f"每个矿池目标 flow 数: {args.target_flows}")
-        print(f"请求并发矿池数: {args.parallel_pools}")
-        capture_pools(args, pools, wallet, temp_path)
+
+        for pool in pools:
+            pool_url = f"{pool.host}:{pool.port}"
+            xmrig_cmd = build_xmrig_command(os.environ, pool_url_override=pool_url)
+            print(f"矿池: {pool.name} {pool_url}")
+            print(f"XMRig: {xmrig_cmd[0]}")
+            print(f"XMRig 命令: {mask_xmrig_command(xmrig_cmd, wallet)}")
+            if args.dry_run:
+                print("预演模式：不启动 XMRig，不实际抓包。")
+            capture_one_pool(args, pool, xmrig_cmd, temp_path)
         return 0
 
 

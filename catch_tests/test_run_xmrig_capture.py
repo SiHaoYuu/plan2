@@ -5,7 +5,6 @@ from tools.run_xmrig_capture import (
     enabled_pools_from_args,
     mask_xmrig_command,
     mask_wallet,
-    parse_args,
     parse_pool_url,
     pool_url_source,
 )
@@ -94,9 +93,3 @@ def test_enabled_pools_from_args_reads_enabled_csv_rows(tmp_path):
     pools = enabled_pools_from_args(args, {"XMR_WALLET": "48abc"})
 
     assert [pool.name for pool in pools] == ["supportxmr"]
-
-
-def test_parse_args_accepts_parallel_pools():
-    args = parse_args(["--interface", "en1", "--parallel-pools", "4"])
-
-    assert args.parallel_pools == 4

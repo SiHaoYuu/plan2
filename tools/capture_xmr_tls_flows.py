@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +21,6 @@ from typing import Iterable, Sequence
 
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
-MANIFEST_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -595,9 +593,8 @@ class CaptureSession:
             "end_time": epoch_to_iso(state.end_time_epoch),
             "recorded_at": utc_now_iso(),
         }
-        with MANIFEST_LOCK:
-            with manifest_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        with manifest_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
