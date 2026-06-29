@@ -39,6 +39,8 @@ DEFAULT_XMRIG_PATH = DEFAULT_XMRIG_DIR / "xmrig"
 XMRIG_RELEASE_BASE_URL = (
     f"https://github.com/xmrig/xmrig/releases/download/v{DEFAULT_XMRIG_VERSION}"
 )
+DEFAULT_INTERFACE = "en1"
+DEFAULT_POOLS_PATH = Path("configs/xmr_pools.csv")
 DEFAULT_POOL_URL = "pool.supportxmr.com:443"
 
 
@@ -273,12 +275,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="启动 XMRig 并同步采集当前矿池 TLS flow。"
     )
-    parser.add_argument("--interface", help="抓包网卡，例如 en1")
+    parser.add_argument(
+        "--interface",
+        default=DEFAULT_INTERFACE,
+        help=f"抓包网卡，默认 {DEFAULT_INTERFACE}",
+    )
     parser.add_argument(
         "--pools",
         type=Path,
+        default=DEFAULT_POOLS_PATH,
+        help=f"矿池 CSV，默认 {DEFAULT_POOLS_PATH}",
+    )
+    parser.add_argument(
+        "--pool-index",
+        type=int,
         default=None,
-        help="可选：按 CSV 中启用矿池逐个启动 XMRig 并采集",
+        help="只采 CSV 中第 N 个启用矿池，编号从 1 开始",
     )
     parser.add_argument("--out-dir", type=Path, default=Path("shy_data_apple_m4"))
     parser.add_argument("--target-flows", type=int, default=1000)
@@ -306,8 +318,23 @@ def enabled_pools_from_args(args: argparse.Namespace, env: Mapping[str, str]) ->
         if not pools:
             raise ValueError(f"{args.pools} 中没有启用的矿池")
         validate_unique_pool_slugs(pools)
-        return pools
+        return select_pool_by_index(pools, args.pool_index)
+    if args.pool_index not in {None, 1}:
+        raise ValueError("未使用 --pools 时，--pool-index 只能为 1")
     return [pool_from_url(env_value(env, "XMR_POOL_URL", DEFAULT_POOL_URL))]
+
+
+def select_pool_by_index(
+    pools: Sequence[PoolConfig], pool_index: int | None
+) -> list[PoolConfig]:
+    if pool_index is None:
+        return list(pools)
+    if pool_index < 1 or pool_index > len(pools):
+        raise ValueError(
+            f"--pool-index 超出范围: {pool_index}，"
+            f"当前启用矿池数量为 {len(pools)}"
+        )
+    return [pools[pool_index - 1]]
 
 
 def capture_one_pool(
@@ -396,9 +423,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.print_env_help:
         print_required_env()
         return 0
-    if not args.interface:
-        print("配置错误: 必须传入 --interface，例如 --interface en1", file=sys.stderr)
-        return 2
 
     try:
         pools = enabled_pools_from_args(args, os.environ)

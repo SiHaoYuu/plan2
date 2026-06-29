@@ -59,16 +59,22 @@ python3 tools/capture_xmr_tls_flows.py \
 推荐模式是让脚本自动逐个启动 XMRig 连接 CSV 中的矿池并采集。脚本会每导出一条完整 flow 后停止 XMRig，再启动下一次连接：
 
 ```sh
-XMR_WALLET=<你的钱包地址> \
+python3 tools/run_xmrig_capture.py --pool-index 3
+```
+
+如果本地没有默认路径 `xmrig-6.26.0/xmrig`，脚本会按当前平台从 XMRig GitHub release 下载 v6.26.0 并解压到本地。也可以用 `XMRIG_PATH` 指向已经安装好的 XMRig。
+
+如需覆盖默认配置，可显式传入完整参数：
+
+```sh
 python3 tools/run_xmrig_capture.py \
   --interface en1 \
   --pools configs/xmr_pools.csv \
+  --pool-index 3 \
   --out-dir shy_data_apple_m4 \
   --target-flows 1000 \
   --tls-packets-per-flow 100
 ```
-
-如果本地没有默认路径 `xmrig-6.26.0/xmrig`，脚本会按当前平台从 XMRig GitHub release 下载 v6.26.0 并解压到本地。也可以用 `XMRIG_PATH` 指向已经安装好的 XMRig。
 
 ## 实现方式
 
@@ -123,6 +129,9 @@ shy_data_apple_m4/capture_manifest.jsonl
 
 ## 主要参数
 
+- `--pool-index`：只采 CSV 中第 N 个启用矿池，编号从 `1` 开始。
+- `--interface`：抓包网卡，默认 `en1`。
+- `--pools`：矿池 CSV，默认 `configs/xmr_pools.csv`。
 - `--target-flows`：每个启用矿池的目标导出 flow 数，默认 `1000`。
 - `--tls-packets-per-flow`：每条 flow 导出的 TLS 包数，默认 `100`。
 - `--tls-display-filter`：TLS display filter，默认 `tls`。

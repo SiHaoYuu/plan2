@@ -6,11 +6,14 @@ from tools.run_xmrig_capture import (
     ensure_xmrig_available,
     mask_xmrig_command,
     mask_wallet,
+    parse_args,
     parse_pool_url,
     pool_url_source,
+    select_pool_by_index,
     xmrig_asset_name,
     xmrig_download_url,
 )
+from tools.capture_xmr_tls_flows import PoolConfig
 
 
 def test_parse_pool_url_accepts_plain_host_port():
@@ -20,6 +23,17 @@ def test_parse_pool_url_accepts_plain_host_port():
 def test_parse_pool_url_rejects_missing_port():
     with pytest.raises(ValueError):
         parse_pool_url("pool.supportxmr.com")
+
+
+def test_parse_args_defaults_to_task_capture_settings():
+    args = parse_args(["--pool-index", "3"])
+
+    assert args.interface == "en1"
+    assert str(args.pools) == "configs/xmr_pools.csv"
+    assert args.pool_index == 3
+    assert args.out_dir.name == "shy_data_apple_m4"
+    assert args.target_flows == 1000
+    assert args.tls_packets_per_flow == 100
 
 
 def test_build_xmrig_command_uses_environment_values():
@@ -127,8 +141,41 @@ def test_enabled_pools_from_args_reads_enabled_csv_rows(tmp_path):
         ),
         encoding="utf-8",
     )
-    args = type("Args", (), {"pools": pools_path})()
+    args = type("Args", (), {"pools": pools_path, "pool_index": None})()
 
     pools = enabled_pools_from_args(args, {"XMR_WALLET": "48abc"})
 
     assert [pool.name for pool in pools] == ["supportxmr"]
+
+
+def test_enabled_pools_from_args_selects_one_based_pool_index(tmp_path):
+    pools_path = tmp_path / "pools.csv"
+    pools_path.write_text(
+        "\n".join(
+            [
+                "name,host,port,enabled,notes",
+                "supportxmr,pool.supportxmr.com,443,true,",
+                "nanopool,xmr-eu1.nanopool.org,10343,true,",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    args = type("Args", (), {"pools": pools_path, "pool_index": 2})()
+
+    pools = enabled_pools_from_args(args, {"XMR_WALLET": "48abc"})
+
+    assert [pool.name for pool in pools] == ["nanopool"]
+
+
+def test_select_pool_by_index_rejects_out_of_range_index():
+    pools = [PoolConfig("supportxmr", "pool.supportxmr.com", 443)]
+
+    with pytest.raises(ValueError):
+        select_pool_by_index(pools, 2)
+
+
+def test_enabled_pools_from_args_rejects_pool_index_without_csv():
+    args = type("Args", (), {"pools": None, "pool_index": 2})()
+
+    with pytest.raises(ValueError):
+        enabled_pools_from_args(args, {"XMR_WALLET": "48abc"})
