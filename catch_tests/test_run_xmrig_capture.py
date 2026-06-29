@@ -60,6 +60,8 @@ def test_build_xmrig_command_uses_environment_values():
     assert "--algo" in cmd
     assert "rx/0" in cmd
     assert "--keepalive" in cmd
+    assert "-t" in cmd
+    assert cmd[cmd.index("-t") + 1] == "2"
     assert cmd[-2:] == ["--donate-level", "1"]
 
 

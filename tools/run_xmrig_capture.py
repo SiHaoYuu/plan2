@@ -173,7 +173,7 @@ def build_xmrig_command(
         password,
         "--algo",
         algorithm,
-        "--threads",
+        "-t",
         threads,
         "--cpu-priority",
         cpu_priority,
