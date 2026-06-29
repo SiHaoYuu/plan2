@@ -1,1 +1,5 @@
 *.docx
+*.pyc
+__pycache__/
+.pytest_cache/
+shy_data_apple_m4/
