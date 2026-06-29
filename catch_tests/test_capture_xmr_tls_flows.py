@@ -55,6 +55,21 @@ def test_parse_tshark_fields_tracks_initial_syn_for_complete_flow(tmp_path):
     assert packets[1].is_tls
 
 
+def test_parse_tshark_fields_accepts_true_false_tcp_flags(tmp_path):
+    output = "\n".join(
+        [
+            "1\t1700000000.0\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\tTrue\tFalse\teth:ip:tcp",
+            "7\t1700000000.1\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\tFalse\tTrue\teth:ip:tcp:tls",
+        ]
+    )
+
+    packets = parse_tshark_tls_fields(output, tmp_path / "chunk.pcapng")
+
+    assert packets[0].is_initial_syn
+    assert not packets[0].is_tls
+    assert packets[1].is_tls
+
+
 def test_flow_key_is_bidirectional_for_client_and_pool_packets():
     client_to_pool = FlowKey.from_packet("10.0.0.2", 53124, "198.51.100.10", 443)
     pool_to_client = FlowKey.from_packet("198.51.100.10", 443, "10.0.0.2", 53124)

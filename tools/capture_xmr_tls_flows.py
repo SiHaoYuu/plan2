@@ -248,6 +248,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def tshark_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true"}
+
+
 def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
     packets: list[TlsPacket] = []
     for line in output.splitlines():
@@ -267,7 +271,7 @@ def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
             syn_value = fields[8] if len(fields) > 8 else ""
             ack_value = fields[9] if len(fields) > 9 else ""
             protocols = fields[10] if len(fields) > 10 else "tls"
-            is_initial_syn = syn_value == "1" and ack_value == "0"
+            is_initial_syn = tshark_bool(syn_value) and not tshark_bool(ack_value)
             is_tls = ":tls" in protocols or protocols == "tls"
         else:
             raise ValueError(f"unexpected tshark TLS field row: {line!r}")
