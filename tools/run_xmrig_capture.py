@@ -408,7 +408,6 @@ def capture_one_pool(
             tls_packets_per_flow=args.tls_packets_per_flow,
             chunk_seconds=args.chunk_seconds,
             max_idle_seconds_per_pool=args.max_idle_seconds_per_pool,
-            temp_dir=args.out_dir / ".capture_tmp",
             dry_run=True,
         )
         CaptureSession(config).run()
@@ -428,7 +427,6 @@ def capture_one_pool(
             tls_packets_per_flow=args.tls_packets_per_flow,
             chunk_seconds=args.chunk_seconds,
             max_idle_seconds_per_pool=args.max_idle_seconds_per_pool,
-            temp_dir=args.out_dir / ".capture_tmp",
             dry_run=False,
         )
         session = CaptureSession(config)

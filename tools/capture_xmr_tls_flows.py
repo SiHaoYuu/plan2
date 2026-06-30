@@ -171,15 +171,18 @@ class CommandRunner:
             check=False,
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE if capture_text else subprocess.STDOUT,
         )
+        output = result.stdout
+        if result.stderr:
+            output += result.stderr
         if result.returncode != 0:
-            for line in result.stdout.splitlines():
+            for line in output.splitlines():
                 print(f"工具错误: {line}")
-            raise CommandExecutionError(cmd, result.returncode, result.stdout)
+            raise CommandExecutionError(cmd, result.returncode, output)
         if capture_text:
             return result.stdout
-        for line in result.stdout.splitlines():
+        for line in output.splitlines():
             print(f"工具输出: {line}")
         return ""
 
@@ -433,6 +436,8 @@ def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
     for line in output.splitlines():
         if not line.strip():
             continue
+        if line.startswith("Running as user ") and "This could be dangerous" in line:
+            continue
         fields = line.rstrip("\n").split("\t")
         if len(fields) == 6:
             frame, time_epoch, src_host, src_port, dst_host, dst_port = fields
@@ -538,6 +543,39 @@ def parse_frame_numbers(output: str, limit: int | None = None) -> list[str]:
     return numbers[:limit]
 
 
+def tshark_may_drop_access_to_path(path: Path) -> bool:
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return False
+
+    resolved = path.expanduser().resolve(strict=False)
+    for parent in (resolved, *resolved.parents):
+        if parent == parent.parent:
+            break
+        try:
+            mode = parent.stat().st_mode
+        except OSError:
+            continue
+        if not mode & 0o001:
+            return True
+    return False
+
+
+def default_capture_temp_dir(out_dir: Path) -> Path:
+    local_temp_dir = out_dir / ".capture_tmp"
+    if not tshark_may_drop_access_to_path(local_temp_dir):
+        return local_temp_dir
+
+    digest = hashlib.sha256(
+        str(out_dir.resolve(strict=False)).encode("utf-8")
+    ).hexdigest()
+    fallback_dir = Path(tempfile.gettempdir()) / f"plan2_xmr_capture_{digest[:12]}"
+    print(
+        f"临时抓包目录 {local_temp_dir} 位于 tshark 可能无法读取的位置，"
+        f"改用 {fallback_dir}"
+    )
+    return fallback_dir
+
+
 class CaptureSession:
     def __init__(self, config: CaptureConfig, runner: CommandRunner | None = None) -> None:
         self.config = config
@@ -558,7 +596,9 @@ class CaptureSession:
             return
 
         self.config.out_dir.mkdir(parents=True, exist_ok=True)
-        temp_root = self.config.temp_dir or self.config.out_dir / ".capture_tmp"
+        temp_root = self.config.temp_dir or default_capture_temp_dir(
+            self.config.out_dir
+        )
         temp_root.mkdir(parents=True, exist_ok=True)
 
         for pool in pools:

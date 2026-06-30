@@ -32,6 +32,12 @@
 - `catch_tests/test_capture_xmr_tls_flows.py`：采集脚本的轻量单元测试，和 `feature/pcap` 的 `tests/` 目录分离。
 - `shy_data_apple_m4/`：默认输出目录，不应提交实际采集数据。
 
+注意：如果在 `/root/plan2` 下以 root 身份运行，`/root` 默认权限通常是
+`700`，`tshark` 读包时可能因为权限降级而无法读取仓库内的临时
+pcapng。脚本默认会把临时抓包 chunk 自动放到 `/tmp/plan2_xmr_capture_*`。
+如果需要用 `tshark -r` 直接读取最终导出的 pcap，建议运行时也把输出目录
+放到 `/tmp` 或普通用户可访问目录，例如 `--out-dir /tmp/shy_data_apple_m4`。
+
 ## CLI 示例
 
 手动模式适合已有连接程序可控启动顺序的情况。必须先运行抓包脚本，再建立新的矿池连接，否则可能看不到初始 SYN，脚本会拒绝导出该连接：
@@ -70,7 +76,7 @@ python3 tools/run_xmrig_capture.py --pool-index 3
 python3 tools/run_xmrig_capture.py \
   --pools configs/xmr_pools.csv \
   --pool-index 3 \
-  --out-dir shy_data_apple_m4 \
+  --out-dir /tmp/shy_data_apple_m4 \
   --target-flows 1000 \
   --tls-packets-per-flow 100
 ```

@@ -1,14 +1,19 @@
 import json
+import tempfile
+from types import SimpleNamespace
+from pathlib import Path
 
 from tools.capture_xmr_tls_flows import (
     CaptureConfig,
     CaptureSession,
     CommandExecutionError,
+    CommandRunner,
     Endpoint,
     FlowKey,
     FlowState,
     PoolConfig,
     TlsPacket,
+    default_capture_temp_dir,
     parse_tshark_tls_fields,
     sanitize_pool_name,
 )
@@ -41,6 +46,36 @@ def test_parse_tshark_fields_counts_only_tls_rows_from_tshark_output(tmp_path):
     assert [packet.frame_number for packet in packets] == [7, 9]
     assert len({packet.flow_key for packet in packets}) == 1
     assert all(packet.is_tls for packet in packets)
+
+
+def test_parse_tshark_fields_ignores_root_warning_from_stderr_merge(tmp_path):
+    output = "\n".join(
+        [
+            'Running as user "root" and group "root". This could be dangerous.',
+            "7\t1700000000.1\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\t0\t1\teth:ip:tcp:tls",
+        ]
+    )
+
+    packets = parse_tshark_tls_fields(output, tmp_path / "chunk.pcapng")
+
+    assert [packet.frame_number for packet in packets] == [7]
+
+
+def test_command_runner_capture_text_keeps_stderr_out_of_stdout(monkeypatch):
+    def fake_run(*args, **kwargs):
+        assert kwargs["stderr"] is not None
+        return SimpleNamespace(
+            returncode=0,
+            stdout="7\t1700000000.1\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\n",
+            stderr='Running as user "root" and group "root". This could be dangerous.\n',
+        )
+
+    monkeypatch.setattr("tools.capture_xmr_tls_flows.subprocess.run", fake_run)
+
+    output = CommandRunner().run(["tshark", "-r", "chunk.pcapng"], capture_text=True)
+
+    assert output.startswith("7\t1700000000.1")
+    assert "Running as user" not in output
 
 
 def test_parse_tshark_fields_tracks_initial_syn_for_complete_flow(tmp_path):
@@ -370,6 +405,28 @@ def test_capture_chunk_filters_all_resolved_pool_addresses(tmp_path):
     assert runner.commands[0][4] == (
         "tcp and port 443 and (host 141.94.96.71 or host 198.51.100.10)"
     )
+
+
+def test_default_capture_temp_dir_uses_tmp_when_root_parent_blocks_tshark(
+    tmp_path, monkeypatch
+):
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    private_dir.chmod(0o700)
+    out_dir = private_dir / "out"
+    monkeypatch.setattr("tools.capture_xmr_tls_flows.os.geteuid", lambda: 0)
+
+    temp_dir = default_capture_temp_dir(out_dir)
+
+    assert temp_dir.parent == Path(tempfile.gettempdir())
+    assert temp_dir.name.startswith("plan2_xmr_capture_")
+
+
+def test_default_capture_temp_dir_keeps_local_dir_for_non_root(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr("tools.capture_xmr_tls_flows.os.geteuid", lambda: 1000)
+
+    assert default_capture_temp_dir(out_dir) == out_dir / ".capture_tmp"
 
 
 def test_incomplete_flow_stats_reports_tls_progress(tmp_path):
