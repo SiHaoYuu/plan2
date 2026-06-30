@@ -4,10 +4,12 @@ from tools.run_xmrig_capture import (
     build_xmrig_command,
     enabled_pools_from_args,
     ensure_xmrig_available,
+    format_pool_url,
     mask_xmrig_command,
     mask_wallet,
     parse_args,
     parse_pool_url,
+    pool_connection_host,
     pool_url_source,
     select_pool_by_index,
     xmrig_asset_candidates,
@@ -39,6 +41,7 @@ def test_parse_args_defaults_to_task_capture_settings():
     assert str(args.pools) == "configs/xmr_pools.csv"
     assert args.pool_index == 3
     assert args.out_dir.name == "shy_data_apple_m4"
+    assert args.address_family == "ipv4"
     assert args.target_flows == 1000
     assert args.tls_packets_per_flow == 100
     assert args.max_idle_seconds_per_pool == 1800
@@ -144,6 +147,39 @@ def test_build_xmrig_command_accepts_xmrig_path_override():
     )
 
     assert cmd[0] == "xmrig-6.26.0/xmrig"
+
+
+def test_format_pool_url_brackets_ipv6_literal():
+    assert format_pool_url("2001:db8::10", 443) == "[2001:db8::10]:443"
+    assert format_pool_url("198.51.100.10", 443) == "198.51.100.10:443"
+
+
+def test_pool_connection_host_resolves_ipv4_for_xmrig(monkeypatch):
+    def fake_resolve_host(host, address_family):
+        assert host == "pool.supportxmr.com"
+        assert address_family == "ipv4"
+        return ["198.51.100.10", "198.51.100.11"]
+
+    monkeypatch.setattr("tools.run_xmrig_capture.resolve_host", fake_resolve_host)
+
+    host = pool_connection_host(
+        PoolConfig("supportxmr", "pool.supportxmr.com", 443), "ipv4"
+    )
+
+    assert host == "198.51.100.10"
+
+
+def test_pool_connection_host_keeps_hostname_for_all_address_families(monkeypatch):
+    def fail_resolve_host(host, address_family):
+        raise AssertionError(f"unexpected DNS lookup: {host} {address_family}")
+
+    monkeypatch.setattr("tools.run_xmrig_capture.resolve_host", fail_resolve_host)
+
+    host = pool_connection_host(
+        PoolConfig("supportxmr", "pool.supportxmr.com", 443), "all"
+    )
+
+    assert host == "pool.supportxmr.com"
 
 
 def test_xmrig_asset_name_supports_macos_arm64():

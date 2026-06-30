@@ -24,11 +24,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.capture_xmr_tls_flows import (
+    ADDRESS_FAMILY_CHOICES,
     CaptureConfig,
     CaptureSession,
     PoolConfig,
     ensure_capture_tools_available,
     read_pools,
+    resolve_host,
     resolve_capture_interface,
     sanitize_pool_name,
     validate_unique_pool_slugs,
@@ -62,6 +64,28 @@ def parse_pool_url(pool_url: str) -> tuple[str, int]:
     if not sep or not host or not port_text:
         raise ValueError("XMR_POOL_URL 必须类似 pool.supportxmr.com:443")
     return host.strip("[]"), int(port_text)
+
+
+def format_pool_url(host: str, port: int) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
+def pool_connection_host(pool: PoolConfig, address_family: str) -> str:
+    if address_family == "all":
+        return pool.host
+    try:
+        addresses = resolve_host(pool.host, address_family)
+    except OSError as exc:
+        raise ValueError(
+            f"无法解析 {pool.name} ({pool.host}) 的 {address_family} 地址: {exc}"
+        ) from exc
+    if not addresses:
+        raise ValueError(
+            f"{pool.name} ({pool.host}) 没有解析到 {address_family} 地址"
+        )
+    return addresses[0]
 
 
 def mask_wallet(wallet: str) -> str:
@@ -337,6 +361,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="只采 CSV 中第 N 个启用矿池，编号从 1 开始",
     )
     parser.add_argument("--out-dir", type=Path, default=Path("shy_data_apple_m4"))
+    parser.add_argument(
+        "--address-family",
+        choices=ADDRESS_FAMILY_CHOICES,
+        default="ipv4",
+        help="XMRig 连接和抓包使用的地址族，默认 ipv4；需要旧行为可设为 all",
+    )
     parser.add_argument("--target-flows", type=int, default=1000)
     parser.add_argument("--tls-packets-per-flow", type=int, default=100)
     parser.add_argument("--chunk-seconds", type=int, default=15)
@@ -404,6 +434,7 @@ def capture_one_pool(
             interface=args.interface,
             pools_path=pools_path,
             out_dir=args.out_dir,
+            address_family=args.address_family,
             target_flows=args.target_flows,
             tls_packets_per_flow=args.tls_packets_per_flow,
             chunk_seconds=args.chunk_seconds,
@@ -423,6 +454,7 @@ def capture_one_pool(
             interface=args.interface,
             pools_path=pools_path,
             out_dir=args.out_dir,
+            address_family=args.address_family,
             target_flows=1,
             tls_packets_per_flow=args.tls_packets_per_flow,
             chunk_seconds=args.chunk_seconds,
@@ -503,16 +535,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"XMRig 路径: {xmrig_path}")
         print(f"抓包网卡: {args.interface}")
         print(f"抓包输出目录: {args.out_dir}")
+        print(f"地址族: {args.address_family}")
         print(f"每个矿池目标 flow 数: {args.target_flows}")
 
         for pool in pools:
-            pool_url = f"{pool.host}:{pool.port}"
+            try:
+                connection_host = pool_connection_host(pool, args.address_family)
+            except ValueError as exc:
+                print(f"配置错误: {exc}", file=sys.stderr)
+                return 2
+            pool_url = format_pool_url(connection_host, pool.port)
             xmrig_cmd = build_xmrig_command(
                 os.environ,
                 pool_url_override=pool_url,
                 xmrig_path_override=xmrig_path,
             )
-            print(f"矿池: {pool.name} {pool_url}")
+            print(f"矿池: {pool.name} {format_pool_url(pool.host, pool.port)}")
+            if connection_host != pool.host:
+                print(f"XMRig 连接地址: {pool_url}")
             print(f"XMRig: {xmrig_cmd[0]}")
             print(f"XMRig 命令: {mask_xmrig_command(xmrig_cmd, wallet)}")
             if args.dry_run:

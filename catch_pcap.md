@@ -93,8 +93,8 @@ python3 tools/run_xmrig_capture.py \
 采集流程：
 
 1. 从 `configs/xmr_pools.csv` 读取 `enabled=true` 的矿池。
-2. 解析矿池 host 到 IP。
-3. 对每个 IP 使用 capture filter：`tcp and host <ip> and port <port>`。
+2. 默认只解析矿池 host 的 IPv4 地址；如需旧行为可显式传 `--address-family all`。
+3. 对每个解析到的目标地址使用 capture filter：`tcp and host <ip> and port <port>`。
 4. 按 `--chunk-seconds` 分段捕获临时 pcapng。
 5. 对分段运行 `tshark`，跟踪 TLS 包和初始 TCP SYN。
 6. 按双向 TCP conversation 聚合 flow；没有初始 SYN 的连接不导出。
@@ -137,6 +137,7 @@ shy_data_apple_m4/capture_manifest.jsonl
 - `--pool-index`：只采 CSV 中第 N 个启用矿池，编号从 `1` 开始。
 - `--interface`：抓包网卡；不填时自动识别当前活跃网卡。
 - `--pools`：矿池 CSV，默认 `configs/xmr_pools.csv`。
+- `--address-family`：XMRig 连接、DNS 解析和抓包使用的地址族，默认 `ipv4`；可选 `ipv4`、`ipv6`、`all`。
 - `--target-flows`：每个启用矿池的目标导出 flow 数，默认 `1000`。
 - `--tls-packets-per-flow`：每条 flow 导出的 TLS 包数，默认 `100`。
 - `--tls-display-filter`：TLS display filter，默认 `tls`。
@@ -152,6 +153,7 @@ shy_data_apple_m4/capture_manifest.jsonl
 - macOS 抓包权限由用户通过 Wireshark 权限配置或 `sudo` 解决，脚本不绕过系统权限。
 - 用户负责启动矿工或连接程序来产生 XMR 矿池 TLS 流量。
 - `configs/xmr_pools.csv` 中的矿池入口在采集前需要复核，因为公开矿池地址和端口可能变化。
+- 当前脚本默认按 IPv4 采集；`tools/run_xmrig_capture.py` 会把 XMRig 的矿池目标替换为解析出的 IPv4 字面量，避免系统 DNS 自动选择 IPv6。
 - 输出目录 `shy_data_apple_m4/` 可写。
 - `XMR_WALLET` 必须通过环境变量配置；缺失时脚本会直接报错并退出。
 - `xmrig-6.26.0/` 为本地工具目录，当前通过 `.gitignore` 排除，不随本仓库提交；缺失时由运行脚本按当前系统和 CPU 架构从官方 GitHub release 下载对应包。若以后要分发 XMRig 二进制，需要一并保留 GPLv3 许可证文本，并提供对应源码获取说明。

@@ -1,4 +1,5 @@
 import json
+import socket
 import tempfile
 from types import SimpleNamespace
 from pathlib import Path
@@ -14,7 +15,9 @@ from tools.capture_xmr_tls_flows import (
     PoolConfig,
     TlsPacket,
     default_capture_temp_dir,
+    parse_args,
     parse_tshark_tls_fields,
+    resolve_host,
     sanitize_pool_name,
 )
 
@@ -166,6 +169,45 @@ def test_display_filter_uses_ipv6_fields_for_ipv6_endpoints():
     assert "ipv6.dst == 2001:db8::20" in display_filter
 
 
+def test_parse_args_defaults_to_ipv4_capture():
+    args = parse_args(["--dry-run"])
+
+    assert args.address_family == "ipv4"
+
+
+def test_resolve_host_defaults_to_ipv4_only(monkeypatch):
+    def fake_getaddrinfo(host, port, family=0, type=0):
+        del host, port, type
+        records = {
+            socket.AF_INET: [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("198.51.100.10", 0),
+                )
+            ],
+            socket.AF_INET6: [
+                (
+                    socket.AF_INET6,
+                    socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("2001:db8::10", 0, 0, 0),
+                )
+            ],
+        }
+        if family == socket.AF_UNSPEC:
+            return records[socket.AF_INET] + records[socket.AF_INET6]
+        return records[family]
+
+    monkeypatch.setattr("tools.capture_xmr_tls_flows.socket.getaddrinfo", fake_getaddrinfo)
+
+    assert resolve_host("pool.example") == ["198.51.100.10"]
+    assert resolve_host("pool.example", "all") == ["198.51.100.10", "2001:db8::10"]
+
+
 def test_pool_name_sanitization_and_sequence_manifest(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -210,6 +252,7 @@ def test_pool_name_sanitization_and_sequence_manifest(tmp_path):
     ) == 9
     assert sanitize_pool_name("Support XMR!") == "support_xmr"
     assert manifest["pool"] == "Support XMR!"
+    assert manifest["address_family"] == "ipv4"
     assert manifest["tls_packets"] == 2
     assert manifest["complete_tcp_start"] is True
     assert manifest["initial_syn_frame"] == 1

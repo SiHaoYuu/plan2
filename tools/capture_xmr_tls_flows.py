@@ -24,6 +24,7 @@ from typing import Iterable, Sequence
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 CAPTURE_TOOL_COMMANDS = ("dumpcap", "tshark", "editcap", "mergecap")
+ADDRESS_FAMILY_CHOICES = ("ipv4", "ipv6", "all")
 
 
 class CommandExecutionError(RuntimeError):
@@ -149,6 +150,7 @@ class CaptureConfig:
     interface: str
     pools_path: Path
     out_dir: Path
+    address_family: str = "ipv4"
     target_flows: int = 1000
     tls_packets_per_flow: int = 100
     tls_display_filter: str = "tls"
@@ -381,10 +383,28 @@ def read_pools(path: Path) -> list[PoolConfig]:
     return pools
 
 
-def resolve_host(host: str) -> list[str]:
+def socket_family(address_family: str) -> socket.AddressFamily:
+    if address_family == "ipv4":
+        return socket.AF_INET
+    if address_family == "ipv6":
+        return socket.AF_INET6
+    if address_family == "all":
+        return socket.AF_UNSPEC
+    raise ValueError(
+        f"不支持的地址族 {address_family!r}，"
+        f"可选值: {', '.join(ADDRESS_FAMILY_CHOICES)}"
+    )
+
+
+def resolve_host(host: str, address_family: str = "ipv4") -> list[str]:
     addresses = {
         item[4][0]
-        for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        for item in socket.getaddrinfo(
+            host,
+            None,
+            family=socket_family(address_family),
+            type=socket.SOCK_STREAM,
+        )
     }
     return sorted(addresses)
 
@@ -614,6 +634,7 @@ class CaptureSession:
 
     def _print_dry_run_preview(self, pools: Sequence[PoolConfig]) -> None:
         print(f"输出目录: {self.config.out_dir}")
+        print(f"地址族: {self.config.address_family}")
         print(f"每个矿池目标 flow 数: {self.config.target_flows}")
         print(f"每条 flow 的 TLS 包数: {self.config.tls_packets_per_flow}")
         for pool in pools:
@@ -648,7 +669,7 @@ class CaptureSession:
 
     def capture_pool(self, pool: PoolConfig, temp_root: Path) -> None:
         try:
-            addresses = resolve_host(pool.host)
+            addresses = resolve_host(pool.host, self.config.address_family)
         except socket.gaierror as exc:
             print(
                 f"跳过 {pool.name}: 无法解析 {pool.host}: {exc}",
@@ -663,6 +684,7 @@ class CaptureSession:
             return
         print(
             f"开始监听矿池 {pool.name} ({pool.host}:{pool.port})，"
+            f"地址族: {self.config.address_family}，"
             f"解析地址: {', '.join(addresses)}"
         )
 
@@ -868,6 +890,7 @@ class CaptureSession:
             "pool": pool.name,
             "host": pool.host,
             "port": pool.port,
+            "address_family": self.config.address_family,
             "flow": state.key.to_json(),
             "tls_packets": self.config.tls_packets_per_flow,
             "complete_tcp_start": state.initial_syn_packet is not None,
@@ -912,6 +935,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=Path("shy_data_apple_m4"),
         help="pcap 文件和 capture_manifest.jsonl 的输出目录",
     )
+    parser.add_argument(
+        "--address-family",
+        choices=ADDRESS_FAMILY_CHOICES,
+        default="ipv4",
+        help="解析和抓包使用的地址族，默认 ipv4；需要旧行为可设为 all",
+    )
     parser.add_argument("--target-flows", type=int, default=1000)
     parser.add_argument("--tls-packets-per-flow", type=int, default=100)
     parser.add_argument("--tls-display-filter", default="tls")
@@ -942,6 +971,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         interface=interface,
         pools_path=args.pools,
         out_dir=args.out_dir,
+        address_family=args.address_family,
         target_flows=args.target_flows,
         tls_packets_per_flow=args.tls_packets_per_flow,
         tls_display_filter=args.tls_display_filter,
