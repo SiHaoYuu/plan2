@@ -43,7 +43,9 @@ pip freeze > requirements-lock.txt
 
 ## 提交与 Pull Request 规范
 
-当前仓库尚无既有提交规范。提交信息使用简洁祈使句，建议采用 Conventional Commits，例如 `feat: add gru student model`、`test: check teacher logits order`、`docs: update experiment guide`。
+当前仓库尚无既有提交规范。提交信息使用简洁祈使句，建议采用 Conventional Commits，并优先使用中文祈使短句，例如 `feat: 添加gru学生模型`、`test: 校验teacher logits顺序`、`docs: 更新实验指南`。
+
+修改代码后，在相关校验和代码审查均通过的前提下，自动提交到当前 git 分支。提交前只暂存本次任务涉及的文件，避免混入无关工作区改动；提交信息沿用本仓库最近提交的风格。
 
 PR 应说明实验改动、运行命令、影响的表格或图，并提供验证证据：seed、配置路径、指标和输出 hash。涉及结果变更时，必须说明测试集是否只用于最终固定评估。
 
