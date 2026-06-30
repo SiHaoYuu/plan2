@@ -10,10 +10,17 @@ from tools.run_xmrig_capture import (
     parse_pool_url,
     pool_url_source,
     select_pool_by_index,
+    xmrig_asset_candidates,
     xmrig_asset_name,
     xmrig_download_url,
 )
-from tools.capture_xmr_tls_flows import PoolConfig
+from tools.capture_xmr_tls_flows import (
+    PoolConfig,
+    detect_sysfs_active_interface,
+    parse_bsd_route_interface,
+    parse_linux_route_interface,
+    wireshark_cli_install_commands,
+)
 
 
 def test_parse_pool_url_accepts_plain_host_port():
@@ -28,13 +35,57 @@ def test_parse_pool_url_rejects_missing_port():
 def test_parse_args_defaults_to_task_capture_settings():
     args = parse_args(["--pool-index", "3"])
 
-    assert args.interface == "en1"
+    assert args.interface is None
     assert str(args.pools) == "configs/xmr_pools.csv"
     assert args.pool_index == 3
     assert args.out_dir.name == "shy_data_apple_m4"
     assert args.target_flows == 1000
     assert args.tls_packets_per_flow == 100
     assert args.max_idle_seconds_per_pool == 1800
+
+
+def test_parse_linux_route_interface_reads_default_route_device():
+    output = "1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.10 uid 501"
+
+    assert parse_linux_route_interface(output) == "eth0"
+
+
+def test_parse_bsd_route_interface_reads_default_route_device():
+    output = "\n".join(
+        [
+            "   route to: default",
+            "destination: default",
+            "  interface: en0",
+        ]
+    )
+
+    assert parse_bsd_route_interface(output) == "en0"
+
+
+def test_detect_sysfs_active_interface_skips_loopback_and_virtual_links(tmp_path):
+    for name, state in {
+        "lo": "up",
+        "docker0": "up",
+        "eth0": "down",
+        "enp3s0": "up",
+    }.items():
+        iface_dir = tmp_path / name
+        iface_dir.mkdir()
+        (iface_dir / "operstate").write_text(state, encoding="utf-8")
+
+    assert detect_sysfs_active_interface(tmp_path) == "enp3s0"
+
+
+def test_wireshark_cli_install_commands_use_linux_package_name(monkeypatch):
+    monkeypatch.setattr(
+        "tools.capture_xmr_tls_flows.shutil.which",
+        lambda command: "/usr/bin/apt-get" if command == "apt-get" else None,
+    )
+
+    commands = wireshark_cli_install_commands("Linux")
+
+    assert commands[0][-2:] == ["apt-get", "update"]
+    assert commands[1][-3:] == ["install", "-y", "tshark"]
 
 
 def test_build_xmrig_command_uses_environment_values():
@@ -65,6 +116,11 @@ def test_build_xmrig_command_uses_environment_values():
     assert cmd[-2:] == ["--donate-level", "1"]
 
 
+def test_build_xmrig_command_requires_wallet():
+    with pytest.raises(ValueError, match="XMR_WALLET"):
+        build_xmrig_command({"XMRIG_PATH": "xmrig-6.26.0/xmrig"})
+
+
 def test_build_xmrig_command_accepts_pool_override():
     cmd = build_xmrig_command(
         {
@@ -92,6 +148,19 @@ def test_build_xmrig_command_accepts_xmrig_path_override():
 
 def test_xmrig_asset_name_supports_macos_arm64():
     assert xmrig_asset_name("Darwin", "arm64") == "xmrig-6.26.0-macos-arm64.tar.gz"
+
+
+def test_xmrig_asset_name_supports_linux_x64():
+    assert xmrig_asset_name("Linux", "x86_64") == (
+        "xmrig-6.26.0-linux-static-x64.tar.gz"
+    )
+
+
+def test_xmrig_asset_candidates_support_linux_arm64():
+    assert xmrig_asset_candidates("Linux", "aarch64") == [
+        "xmrig-6.26.0-linux-static-arm64.tar.gz",
+        "xmrig-6.26.0-linux-arm64.tar.gz",
+    ]
 
 
 def test_xmrig_download_url_points_to_official_release_asset():

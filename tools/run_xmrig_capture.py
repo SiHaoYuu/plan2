@@ -27,7 +27,9 @@ from tools.capture_xmr_tls_flows import (
     CaptureConfig,
     CaptureSession,
     PoolConfig,
+    ensure_capture_tools_available,
     read_pools,
+    resolve_capture_interface,
     sanitize_pool_name,
     validate_unique_pool_slugs,
 )
@@ -39,7 +41,6 @@ DEFAULT_XMRIG_PATH = DEFAULT_XMRIG_DIR / "xmrig"
 XMRIG_RELEASE_BASE_URL = (
     f"https://github.com/xmrig/xmrig/releases/download/v{DEFAULT_XMRIG_VERSION}"
 )
-DEFAULT_INTERFACE = "en1"
 DEFAULT_POOLS_PATH = Path("configs/xmr_pools.csv")
 DEFAULT_POOL_URL = "pool.supportxmr.com:443"
 DEFAULT_XMR_ALGO = "rx/0"
@@ -71,20 +72,42 @@ def mask_wallet(wallet: str) -> str:
     return wallet[:8] + "..." + wallet[-6:]
 
 
-def xmrig_asset_name(
+def normalized_machine(machine: str) -> str:
+    machine = machine.lower()
+    if machine in {"x86_64", "amd64"}:
+        return "x64"
+    if machine in {"aarch64", "arm64"}:
+        return "arm64"
+    return machine
+
+
+def xmrig_asset_candidates(
     system: str | None = None, machine: str | None = None
-) -> str:
+) -> list[str]:
     system = system or platform.system()
-    machine = (machine or platform.machine()).lower()
-    if system == "Darwin" and machine in {"arm64", "aarch64"}:
-        return f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-arm64.tar.gz"
-    if system == "Darwin" and machine in {"x86_64", "amd64"}:
-        return f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-x64.tar.gz"
-    if system == "Linux" and machine in {"x86_64", "amd64"}:
-        return f"xmrig-{DEFAULT_XMRIG_VERSION}-linux-static-x64.tar.gz"
+    machine = normalized_machine(machine or platform.machine())
+    if system == "Darwin" and machine == "arm64":
+        return [f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-arm64.tar.gz"]
+    if system == "Darwin" and machine == "x64":
+        return [f"xmrig-{DEFAULT_XMRIG_VERSION}-macos-x64.tar.gz"]
+    if system == "Linux" and machine == "x64":
+        return [f"xmrig-{DEFAULT_XMRIG_VERSION}-linux-static-x64.tar.gz"]
+    if system == "Linux" and machine == "arm64":
+        return [
+            f"xmrig-{DEFAULT_XMRIG_VERSION}-linux-static-arm64.tar.gz",
+            f"xmrig-{DEFAULT_XMRIG_VERSION}-linux-arm64.tar.gz",
+        ]
+    if system == "Windows":
+        raise ValueError("不支持 Windows 自动准备 XMRig；请在 Linux 或 macOS 上运行")
     raise ValueError(
         f"当前平台暂未配置 XMRig 自动下载: system={system} machine={machine}"
     )
+
+
+def xmrig_asset_name(
+    system: str | None = None, machine: str | None = None
+) -> str:
+    return xmrig_asset_candidates(system, machine)[0]
 
 
 def xmrig_download_url(asset_name: str | None = None) -> str:
@@ -102,16 +125,24 @@ def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
 
 
 def download_xmrig(dest_root: Path = REPO_ROOT) -> Path:
-    asset_name = xmrig_asset_name()
-    url = xmrig_download_url(asset_name)
-    archive_path = dest_root / asset_name
-    print(f"本地未找到 XMRig，开始下载: {url}")
-    try:
-        urllib.request.urlretrieve(url, archive_path)
-        safe_extract_tar(archive_path, dest_root)
-    finally:
-        if archive_path.exists():
-            archive_path.unlink()
+    errors: list[str] = []
+    for asset_name in xmrig_asset_candidates():
+        url = xmrig_download_url(asset_name)
+        archive_path = dest_root / asset_name
+        print(f"本地未找到 XMRig，开始下载: {url}")
+        try:
+            urllib.request.urlretrieve(url, archive_path)
+            safe_extract_tar(archive_path, dest_root)
+            break
+        except Exception as exc:
+            errors.append(f"{asset_name}: {exc}")
+        finally:
+            if archive_path.exists():
+                archive_path.unlink()
+    else:
+        raise FileNotFoundError(
+            "无法根据当前系统自动下载 XMRig: " + "; ".join(errors)
+        )
     xmrig_path = dest_root / DEFAULT_XMRIG_PATH
     if not xmrig_path.exists():
         raise FileNotFoundError(f"下载解压后仍未找到 XMRig: {xmrig_path}")
@@ -290,8 +321,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--interface",
-        default=DEFAULT_INTERFACE,
-        help=f"抓包网卡，默认 {DEFAULT_INTERFACE}",
+        default=None,
+        help="抓包网卡；不填时自动识别当前活跃网卡",
     )
     parser.add_argument(
         "--pools",
@@ -325,6 +356,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--print-env-help",
         action="store_true",
         help="打印需要配置的环境变量",
+    )
+    parser.add_argument(
+        "--no-auto-install-tools",
+        action="store_true",
+        help="缺少 dumpcap/tshark/editcap/mergecap 时只报错，不自动安装",
     )
     return parser.parse_args(argv)
 
@@ -442,14 +478,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     try:
-        pools = enabled_pools_from_args(args, os.environ)
         wallet = env_value(os.environ, "XMR_WALLET")
+        pools = enabled_pools_from_args(args, os.environ)
+        args.interface = resolve_capture_interface(args.interface)
+        if not args.dry_run:
+            ensure_capture_tools_available(
+                auto_install=not args.no_auto_install_tools
+            )
         xmrig_path = ensure_xmrig_available(os.environ)
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         print_required_env()
         return 2
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
 
@@ -462,6 +503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"矿池来源: {args.pools}")
         print(f"钱包: {mask_wallet(wallet)}")
         print(f"XMRig 路径: {xmrig_path}")
+        print(f"抓包网卡: {args.interface}")
         print(f"抓包输出目录: {args.out_dir}")
         print(f"每个矿池目标 flow 数: {args.target_flows}")
 

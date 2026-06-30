@@ -3,6 +3,7 @@ import json
 from tools.capture_xmr_tls_flows import (
     CaptureConfig,
     CaptureSession,
+    CommandExecutionError,
     Endpoint,
     FlowKey,
     FlowState,
@@ -20,6 +21,8 @@ class FakeRunner:
 
     def run(self, cmd, capture_text=False):
         self.commands.append(list(cmd))
+        if self.responses and isinstance(self.responses[0], BaseException):
+            raise self.responses.pop(0)
         if capture_text:
             return self.responses.pop(0)
         return ""
@@ -68,6 +71,48 @@ def test_parse_tshark_fields_accepts_true_false_tcp_flags(tmp_path):
     assert packets[0].is_initial_syn
     assert not packets[0].is_tls
     assert packets[1].is_tls
+
+
+def test_parse_tshark_fields_accepts_legacy_ssl_protocol_name(tmp_path):
+    output = "\n".join(
+        [
+            "1\t1700000000.0\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\t1\t0\teth:ip:tcp",
+            "7\t1700000000.1\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\t0\t1\teth:ip:tcp:ssl",
+        ]
+    )
+
+    packets = parse_tshark_tls_fields(output, tmp_path / "chunk.pcapng")
+
+    assert packets[0].is_initial_syn
+    assert not packets[0].is_tls
+    assert packets[1].is_tls
+
+
+def test_read_tls_packet_fields_falls_back_to_legacy_ssl_filter(tmp_path):
+    runner = FakeRunner(
+        responses=[
+            CommandExecutionError(["tshark"], 3, "tls is not a protocol"),
+            "7\t1700000000.1\t10.0.0.2\t\t53124\t198.51.100.10\t\t443\t0\t1\teth:ip:tcp:ssl",
+        ]
+    )
+    config = CaptureConfig(
+        interface="en1",
+        pools_path=tmp_path / "pools.csv",
+        out_dir=tmp_path / "out",
+        target_flows=1,
+        tls_packets_per_flow=1,
+    )
+    session = CaptureSession(config, runner=runner)
+
+    output = session.read_tls_packet_fields(tmp_path / "chunk.pcapng")
+
+    assert "eth:ip:tcp:ssl" in output
+    assert runner.commands[0][4] == (
+        "tcp and ((tls) or (tcp.flags.syn == 1 and tcp.flags.ack == 0))"
+    )
+    assert runner.commands[1][4] == (
+        "tcp and ((ssl) or (tcp.flags.syn == 1 and tcp.flags.ack == 0))"
+    )
 
 
 def test_flow_key_is_bidirectional_for_client_and_pool_packets():

@@ -8,7 +8,9 @@ import csv
 import hashlib
 import json
 import os
+import platform
 import re
+import shutil
 import shlex
 import socket
 import subprocess
@@ -21,6 +23,18 @@ from typing import Iterable, Sequence
 
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
+CAPTURE_TOOL_COMMANDS = ("dumpcap", "tshark", "editcap", "mergecap")
+
+
+class CommandExecutionError(RuntimeError):
+    def __init__(self, cmd: Sequence[str], returncode: int, output: str) -> None:
+        self.cmd = list(cmd)
+        self.returncode = returncode
+        self.output = output
+        super().__init__(
+            "命令执行失败 "
+            f"(exit {returncode}): {shlex.join(str(part) for part in cmd)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -154,16 +168,178 @@ class CommandRunner:
             return ""
         result = subprocess.run(
             list(cmd),
-            check=True,
+            check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
+        if result.returncode != 0:
+            for line in result.stdout.splitlines():
+                print(f"工具错误: {line}")
+            raise CommandExecutionError(cmd, result.returncode, result.stdout)
         if capture_text:
             return result.stdout
         for line in result.stdout.splitlines():
             print(f"工具输出: {line}")
         return ""
+
+
+def parse_linux_route_interface(output: str) -> str | None:
+    match = re.search(r"\bdev\s+([^\s]+)", output)
+    if match:
+        return match.group(1)
+    return None
+
+
+def parse_bsd_route_interface(output: str) -> str | None:
+    for line in output.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "interface":
+            value = value.strip()
+            if value:
+                return value
+    return None
+
+
+def command_output(cmd: Sequence[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            list(cmd),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
+def detect_sysfs_active_interface(
+    sys_class_net: Path = Path("/sys/class/net"),
+) -> str | None:
+    if not sys_class_net.exists():
+        return None
+    ignored_prefixes = ("br-", "docker", "veth", "virbr")
+    candidates: list[str] = []
+    for iface_path in sorted(sys_class_net.iterdir()):
+        name = iface_path.name
+        if name == "lo" or name.startswith(ignored_prefixes):
+            continue
+        operstate_path = iface_path / "operstate"
+        try:
+            operstate = operstate_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if operstate == "up":
+            candidates.append(name)
+    return candidates[0] if candidates else None
+
+
+def detect_active_interface(system: str | None = None) -> str:
+    system = system or platform.system()
+    if system == "Linux":
+        output = command_output(["ip", "route", "get", "1.1.1.1"])
+        iface = parse_linux_route_interface(output or "")
+        if iface:
+            return iface
+        iface = detect_sysfs_active_interface()
+        if iface:
+            return iface
+    elif system == "Darwin":
+        output = command_output(["route", "-n", "get", "default"])
+        iface = parse_bsd_route_interface(output or "")
+        if iface:
+            return iface
+    elif system == "Windows":
+        raise RuntimeError("不支持 Windows 自动抓包；请在 Linux 或 macOS 上运行")
+    raise RuntimeError("无法自动识别活跃网卡，请使用 --interface 手动指定")
+
+
+def resolve_capture_interface(interface: str | None) -> str:
+    if interface and interface.strip():
+        return interface.strip()
+    iface = detect_active_interface()
+    print(f"自动识别抓包网卡: {iface}")
+    return iface
+
+
+def missing_commands(commands: Sequence[str]) -> list[str]:
+    return [command for command in commands if shutil.which(command) is None]
+
+
+def sudo_prefix() -> list[str]:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return []
+    return ["sudo"]
+
+
+def wireshark_cli_install_commands(system: str | None = None) -> list[list[str]]:
+    system = system or platform.system()
+    if system == "Darwin":
+        if shutil.which("brew"):
+            return [["brew", "install", "wireshark"]]
+        return []
+    if system != "Linux":
+        if system == "Windows":
+            raise RuntimeError("不支持 Windows 自动安装 Wireshark CLI")
+        return []
+
+    prefix = sudo_prefix()
+    if shutil.which("apt-get"):
+        return [
+            prefix + ["apt-get", "update"],
+            prefix + ["apt-get", "install", "-y", "tshark"],
+        ]
+    if shutil.which("dnf"):
+        return [prefix + ["dnf", "install", "-y", "wireshark-cli"]]
+    if shutil.which("yum"):
+        return [prefix + ["yum", "install", "-y", "wireshark-cli"]]
+    if shutil.which("pacman"):
+        return [prefix + ["pacman", "-Sy", "--noconfirm", "wireshark-cli"]]
+    if shutil.which("zypper"):
+        return [prefix + ["zypper", "--non-interactive", "install", "wireshark"]]
+    if shutil.which("apk"):
+        return [prefix + ["apk", "add", "wireshark-common"]]
+    return []
+
+
+def run_install_command(cmd: Sequence[str]) -> None:
+    print("安装依赖: " + shlex.join(str(part) for part in cmd))
+    env = os.environ.copy()
+    if "apt-get" in cmd:
+        env.setdefault("DEBIAN_FRONTEND", "noninteractive")
+    subprocess.run(list(cmd), check=True, env=env)
+
+
+def ensure_capture_tools_available(auto_install: bool = True) -> None:
+    missing = missing_commands(CAPTURE_TOOL_COMMANDS)
+    if not missing:
+        return
+    if not auto_install:
+        raise FileNotFoundError(
+            "缺少 Wireshark CLI 工具: "
+            + ", ".join(missing)
+            + "；请安装 tshark/wireshark-cli 后重试"
+        )
+
+    commands = wireshark_cli_install_commands()
+    if not commands:
+        raise FileNotFoundError(
+            "缺少 Wireshark CLI 工具: "
+            + ", ".join(missing)
+            + "；当前系统未识别到支持的包管理器，请手动安装 tshark/wireshark-cli"
+        )
+    print("缺少 Wireshark CLI 工具: " + ", ".join(missing))
+    for cmd in commands:
+        run_install_command(cmd)
+    remaining = missing_commands(CAPTURE_TOOL_COMMANDS)
+    if remaining:
+        raise FileNotFoundError(
+            "已尝试自动安装，但仍缺少工具: "
+            + ", ".join(remaining)
+            + "；请检查 PATH 或手动安装 Wireshark CLI"
+        )
 
 
 def utc_now_iso() -> str:
@@ -272,7 +448,8 @@ def parse_tshark_tls_fields(output: str, chunk_path: Path) -> list[TlsPacket]:
             ack_value = fields[9] if len(fields) > 9 else ""
             protocols = fields[10] if len(fields) > 10 else "tls"
             is_initial_syn = tshark_bool(syn_value) and not tshark_bool(ack_value)
-            is_tls = ":tls" in protocols or protocols == "tls"
+            protocol_names = set(protocols.split(":"))
+            is_tls = bool(protocol_names & {"tls", "ssl"})
         else:
             raise ValueError(f"unexpected tshark TLS field row: {line!r}")
         if not src_host or not dst_host or not src_port or not dst_port:
@@ -504,9 +681,30 @@ class CaptureSession:
         return chunk_path
 
     def read_tls_packets(self, chunk_path: Path) -> list[TlsPacket]:
-        cmd = tshark_tls_field_command(chunk_path, self.config.tls_display_filter)
-        output = self.runner.run(cmd, capture_text=True)
+        output = self.read_tls_packet_fields(chunk_path)
         return parse_tshark_tls_fields(output, chunk_path)
+
+    def read_tls_packet_fields(self, chunk_path: Path) -> str:
+        filters = [self.config.tls_display_filter]
+        if self.config.tls_display_filter == "tls":
+            filters.append("ssl")
+        if "tcp" not in filters:
+            filters.append("tcp")
+        last_error: CommandExecutionError | None = None
+        for index, display_filter in enumerate(filters):
+            cmd = tshark_tls_field_command(chunk_path, display_filter)
+            try:
+                return self.runner.run(cmd, capture_text=True)
+            except CommandExecutionError as exc:
+                last_error = exc
+                if index == len(filters) - 1:
+                    break
+                print(
+                    f"tshark 不接受 display filter {display_filter!r}，"
+                    f"改用 {filters[index + 1]!r} 重试"
+                )
+        assert last_error is not None
+        raise last_error
 
     def add_packets(
         self, pool: PoolConfig, packets: Iterable[TlsPacket], temp_root: Path
@@ -657,7 +855,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="采集 XMR 矿池 TLS flow，并导出固定 TLS 包数的 pcap 文件。"
     )
-    parser.add_argument("--interface", required=True, help="抓包网卡，例如 en1")
+    parser.add_argument(
+        "--interface",
+        default=None,
+        help="抓包网卡；不填时自动识别当前活跃网卡",
+    )
     parser.add_argument(
         "--pools",
         type=Path,
@@ -677,13 +879,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-idle-seconds-per-pool", type=int, default=180)
     parser.add_argument("--temp-dir", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--no-auto-install-tools",
+        action="store_true",
+        help="缺少 dumpcap/tshark/editcap/mergecap 时只报错，不自动安装",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    try:
+        interface = resolve_capture_interface(args.interface)
+        if not args.dry_run:
+            ensure_capture_tools_available(
+                auto_install=not args.no_auto_install_tools
+            )
+    except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
+        return 2
     config = CaptureConfig(
-        interface=args.interface,
+        interface=interface,
         pools_path=args.pools,
         out_dir=args.out_dir,
         target_flows=args.target_flows,

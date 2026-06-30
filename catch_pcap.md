@@ -38,7 +38,6 @@
 
 ```sh
 python3 tools/capture_xmr_tls_flows.py \
-  --interface en1 \
   --pools configs/xmr_pools.csv \
   --out-dir shy_data_apple_m4 \
   --target-flows 1000 \
@@ -49,7 +48,6 @@ python3 tools/capture_xmr_tls_flows.py \
 
 ```sh
 python3 tools/capture_xmr_tls_flows.py \
-  --interface en1 \
   --pools configs/xmr_pools.csv \
   --out-dir shy_data_apple_m4 \
   --target-flows 5000 \
@@ -70,7 +68,6 @@ python3 tools/run_xmrig_capture.py --pool-index 3
 
 ```sh
 python3 tools/run_xmrig_capture.py \
-  --interface en1 \
   --pools configs/xmr_pools.csv \
   --pool-index 3 \
   --out-dir shy_data_apple_m4 \
@@ -132,7 +129,7 @@ shy_data_apple_m4/capture_manifest.jsonl
 ## 主要参数
 
 - `--pool-index`：只采 CSV 中第 N 个启用矿池，编号从 `1` 开始。
-- `--interface`：抓包网卡，默认 `en1`。
+- `--interface`：抓包网卡；不填时自动识别当前活跃网卡。
 - `--pools`：矿池 CSV，默认 `configs/xmr_pools.csv`。
 - `--target-flows`：每个启用矿池的目标导出 flow 数，默认 `1000`。
 - `--tls-packets-per-flow`：每条 flow 导出的 TLS 包数，默认 `100`。
@@ -145,12 +142,13 @@ shy_data_apple_m4/capture_manifest.jsonl
 
 ## 使用前提
 
-- Wireshark CLI 已安装，`dumpcap`、`tshark`、`editcap`、`mergecap` 均在 `PATH` 中。
+- 脚本会检查 `dumpcap`、`tshark`、`editcap`、`mergecap`，缺失时按当前系统包管理器自动安装 Wireshark CLI；也可以传 `--no-auto-install-tools` 改为只报错。
 - macOS 抓包权限由用户通过 Wireshark 权限配置或 `sudo` 解决，脚本不绕过系统权限。
 - 用户负责启动矿工或连接程序来产生 XMR 矿池 TLS 流量。
 - `configs/xmr_pools.csv` 中的矿池入口在采集前需要复核，因为公开矿池地址和端口可能变化。
 - 输出目录 `shy_data_apple_m4/` 可写。
-- `xmrig-6.26.0/` 为本地工具目录，当前通过 `.gitignore` 排除，不随本仓库提交；缺失时由运行脚本从官方 GitHub release 下载。若以后要分发 XMRig 二进制，需要一并保留 GPLv3 许可证文本，并提供对应源码获取说明。
+- `XMR_WALLET` 必须通过环境变量配置；缺失时脚本会直接报错并退出。
+- `xmrig-6.26.0/` 为本地工具目录，当前通过 `.gitignore` 排除，不随本仓库提交；缺失时由运行脚本按当前系统和 CPU 架构从官方 GitHub release 下载对应包。若以后要分发 XMRig 二进制，需要一并保留 GPLv3 许可证文本，并提供对应源码获取说明。
 
 ## 测试计划
 
