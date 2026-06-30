@@ -66,5 +66,7 @@ sudo systemctl stop plan2-xmrig-capture.service
 如果你的 venv 里只有 `python` 没有 `python3`，把 service 里的 `ExecStart` 改成：
 
 ```ini
-ExecStart=/root/plan2/.venv/bin/python /root/plan2/tools/run_xmrig_capture.py --pool-index 2 --out-dir /tmp/shy_data_apple_m4 --target-flows 1 --tls-packets-per-flow 100
+ExecStart=/root/plan2/.venv/bin/python /root/plan2/tools/run_xmrig_capture.py --pool-index 2 --out-dir /tmp/shy_data_apple_m4
 ```
+
+不要在 service 里加 `--target-flows 1`，否则脚本导出 1 条完整 flow 后就会正常退出。少参数运行时，`tools/run_xmrig_capture.py` 默认 `--target-flows 1000`、`--tls-packets-per-flow 100`。

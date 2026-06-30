@@ -13,7 +13,7 @@ WorkingDirectory=/root/plan2
 EnvironmentFile=/etc/plan2/xmrig-capture.env
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/root/plan2/.venv/bin/python3 /root/plan2/tools/run_xmrig_capture.py --pool-index 2 --out-dir /tmp/shy_data_apple_m4 --target-flows 1 --tls-packets-per-flow 100
+ExecStart=/root/plan2/.venv/bin/python3 /root/plan2/tools/run_xmrig_capture.py --pool-index 2 --out-dir /tmp/shy_data_apple_m4
 
 Restart=no
 KillSignal=SIGINT
