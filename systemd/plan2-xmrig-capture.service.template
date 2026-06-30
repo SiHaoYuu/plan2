@@ -1,0 +1,26 @@
+[Unit]
+Description=Plan2 XMRig TLS capture
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/plan2
+
+# Put exported variables here instead of using "source .venv/bin/activate".
+EnvironmentFile=/etc/plan2/xmrig-capture.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/root/plan2/.venv/bin/python3 /root/plan2/tools/run_xmrig_capture.py --pool-index 2 --out-dir /tmp/shy_data_apple_m4 --target-flows 1 --tls-packets-per-flow 100
+
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plan2-xmrig-capture
+
+[Install]
+WantedBy=multi-user.target
